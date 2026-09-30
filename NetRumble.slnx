@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/NetRumble.Core/NetRumble.Core.csproj" />
+    <Project Path="src/NetRumble.Game/NetRumble.Game.csproj" />
+    <Project Path="src/NetRumble.Platform.GameCore/NetRumble.Platform.GameCore.csproj" />
+    <Project Path="src/NetRumble.Platform.Lan/NetRumble.Platform.Lan.csproj" />
+    <Project Path="src/NetRumble.Platform.Offline/NetRumble.Platform.Offline.csproj" />
+    <Project Path="src/NetRumble.Platform.PlayFab/NetRumble.Platform.PlayFab.csproj" />
+    <Project Path="src/NetRumble.Platform/NetRumble.Platform.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/NetRumble.PlatformSpike/NetRumble.PlatformSpike.csproj" />
+  </Folder>
+</Solution>

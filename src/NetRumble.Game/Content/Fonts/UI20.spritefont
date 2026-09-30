@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  UI font at 20 px, one of the sizes assets/ui/netrumble.tres declares.
+  See Fonts/UI.spritefont for why the typeface is Selawik and not Segoe UI.
+-->
+<XnaContent xmlns:Graphics="Microsoft.Xna.Framework.Content.Pipeline.Graphics">
+  <Asset Type="Graphics:FontDescription">
+    <FontName>selawk.ttf</FontName>
+    <Size>20</Size>
+    <Spacing>0</Spacing>
+    <UseKerning>true</UseKerning>
+    <Style>Regular</Style>
+    <DefaultCharacter>?</DefaultCharacter>
+    <CharacterRegions>
+      <CharacterRegion>
+        <Start>&#32;</Start>
+        <End>&#126;</End>
+      </CharacterRegion>
+      <!--
+        Beyond ASCII, and needed. A SpriteFont only rasterises what is listed here;
+        anything else is silently swapped for DefaultCharacter at draw time, with no
+        exception and nothing in a log.
+
+        The ellipsis carries every progress string ("Connecting", "Joining", "Match
+        starting in 3") and the em dash the weapon label and the final standings,
+        matching the GDScript character for character. En dash comes along as the other
+        half of the pair rather than being left as the next one to be discovered.
+
+        Latin-1 Supplement and Latin Extended-A are here for display names, which are not
+        ours to choose. The wire carries them as UTF-8 and the spike deliberately
+        round-trips "Pilot Ake" with a ring on the A, so an accented gamertag reaches the
+        roster, the scoreboard and the standings and has to be drawable when it does.
+        This covers Western and Central European names. Godot rasterised glyphs on demand
+        from the TTF and so had no such limit; a fixed atlas cannot, and a name outside
+        these ranges still degrades to DefaultCharacter. See docs/troubleshooting.md.
+      -->
+      <CharacterRegion>
+        <Start>&#160;</Start>
+        <End>&#383;</End>
+      </CharacterRegion>
+      <!--
+        XR-046: every remaining code point Selawik can actually draw. A SpriteFont region
+        that names a glyph the typeface does not have is not free - it is silently mapped
+        to DefaultCharacter and inflates the atlas - so these ranges are the font's real
+        cmap rather than a hopeful superset. What they buy:
+
+          U+0192, U+0237           - florin and dotless j, which Latin Extended-A implies.
+          U+0218-U+021B            - S and T with comma below. Romanian. Latin Extended-A
+                                     alone renders every Romanian name with the wrong
+                                     diacritic or a question mark.
+          U+02C6-U+02DD            - spacing modifier letters (circumflex, caron, ogonek).
+          U+0300-U+0336            - combining marks. A display name normalised to NFD
+                                     arrives as base letter plus mark; without these the
+                                     mark alone became the DefaultCharacter and the name
+                                     read as "Jose?".
+          U+1E80-U+1E85, U+1EF2-3  - W and Y with grave. Welsh.
+          U+2018-U+2030, U+2039-A  - typographic quotes, dagger, bullet, per mille and
+                                     guillemets, which arrive in names pasted from a
+                                     word processor.
+          U+20AC, U+2122           - euro and trade mark.
+
+        Still not covered, and not coverable this way: CJK, Hangul, Cyrillic, Greek,
+        Arabic, Hebrew and Thai. Selawik contains no glyphs for any of them, so no region
+        list can produce them - it needs a font with the coverage and a runtime glyph
+        cache rather than a build-time atlas, because rasterising CJK into eight fixed
+        atlases is not viable. Tracked in docs/known-gaps.md.
+      -->
+      <CharacterRegion>
+        <Start>&#402;</Start>
+        <End>&#402;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#536;</Start>
+        <End>&#539;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#567;</Start>
+        <End>&#567;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#710;</Start>
+        <End>&#711;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#728;</Start>
+        <End>&#733;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#768;</Start>
+        <End>&#772;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#774;</Start>
+        <End>&#776;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#778;</Start>
+        <End>&#780;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#786;</Start>
+        <End>&#786;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#806;</Start>
+        <End>&#808;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#821;</Start>
+        <End>&#822;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#7808;</Start>
+        <End>&#7813;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#7922;</Start>
+        <End>&#7923;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#8211;</Start>
+        <End>&#8212;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#8216;</Start>
+        <End>&#8218;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#8220;</Start>
+        <End>&#8222;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#8224;</Start>
+        <End>&#8226;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#8230;</Start>
+        <End>&#8230;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#8240;</Start>
+        <End>&#8240;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#8249;</Start>
+        <End>&#8250;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#8364;</Start>
+        <End>&#8364;</End>
+      </CharacterRegion>
+      <CharacterRegion>
+        <Start>&#8482;</Start>
+        <End>&#8482;</End>
+      </CharacterRegion>
+    </CharacterRegions>
+  </Asset>
+</XnaContent>
+

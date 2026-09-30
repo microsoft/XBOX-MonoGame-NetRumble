@@ -1,0 +1,103 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The GDK provider: NetRumble.Platform implemented over the Microsoft GDK, PlayFab and
+    Party - through GDK.Net, the managed projection of the GDK flat C API.
+
+    This assembly used to own every DllImport and native handle in the game, behind a
+    hand-written C++ shim. It no longer does: GDK.Net supplies the bindings, the
+    marshalling and the Task-based async model, and this project is now only the mapping
+    from GDK.Net's API onto NetRumble.Platform's interfaces.
+
+    Nothing outside this project may reference it except the composition root
+    (PlatformProviderFactory), which selects it at runtime.
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>NetRumble.Platform.GameCore</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Native interop is Windows-only; suppress the cross-platform analyzer noise. -->
+    <SupportedOSPlatform>windows</SupportedOSPlatform>
+  </PropertyGroup>
+
+  <!--
+    GDK.Net is consumed as a project reference because it is not published to a feed this
+    repo can reach. GdkNetRoot defaults to the sibling checkout layout and can be
+    overridden; see docs/xbox-console-build.md.
+
+    Building this project requires /p:NoWarn=NU1603, which the build scripts pass. GDK.Net
+    asks for a Microsoft.NET.ILLink.Tasks pinned to the 8.0 feature band; a machine with
+    only the 10.0 SDK and no access to nuget.org resolves a newer one and NuGet warns, and
+    GDK.Net builds with TreatWarningsAsErrors. The suppression cannot live here: NU1603 is
+    raised while restore evaluates GDK.Net itself, which does not inherit a referencing
+    project's AdditionalProperties, so a global property is the only lever that reaches
+    it. It is preferred over GdkNetEnableAotAnalyzers=false - the escape hatch GDK.Net
+    documents for exactly this case - because that would switch off the AOT analyzers
+    protecting our NativeAOT console build.
+  -->
+  <PropertyGroup>
+    <GdkNetRoot Condition="'$(GdkNetRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\gdk-dotnet\</GdkNetRoot>
+    <GdkNetProject>$(GdkNetRoot)src\GDK.Net\GDK.Net.csproj</GdkNetProject>
+  </PropertyGroup>
+
+  <Target Name="VerifyGdkNet" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(GdkNetProject)')"
+           Text="GDK.Net was not found at '$(GdkNetProject)'. Clone the gdk-dotnet repository beside this one, or set GdkNetRoot. See docs/getting-started.md." />
+  </Target>
+
+  <ItemGroup>
+    <!--
+      The spike exercises the provider against the real GDK. It no longer needs to see
+      raw P/Invoke declarations - there are none left - but it does construct provider
+      internals directly.
+    -->
+    <InternalsVisibleTo Include="NetRumble.PlatformSpike" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(GdkNetProject)" />
+    <ProjectReference Include="..\NetRumble.Platform\NetRumble.Platform.csproj" />
+    <ProjectReference Include="..\NetRumble.Platform.Lan\NetRumble.Platform.Lan.csproj" />
+    <ProjectReference Include="..\NetRumble.Platform.Offline\NetRumble.Platform.Offline.csproj" />
+    <ProjectReference Include="..\NetRumble.Platform.PlayFab\NetRumble.Platform.PlayFab.csproj" />
+  </ItemGroup>
+
+  <!--
+    The Gaming Runtime thunks.
+
+    The GDK flat API is not exported by any DLL - it is linked in from the static library
+    xgameruntime.lib - so it cannot be P/Invoked directly. The GDK's answer for managed
+    callers is xgameruntime.thunks.dll, a redistributable that re-exports those stubs, and
+    it is the library GDK.Net binds every core entry point to. It lives in the SDK
+    directory rather than on PATH, so it has to be carried into the output directory.
+
+    This replaced our own C++ shim, which solved the same problem by hand. Using the
+    redistributable instead means the game no longer builds, versions or ships native code
+    of its own on desktop; see docs/xbox-console-build.md for the console half, where the GDK ships no
+    thunks DLL and we build one from the same stubs.
+
+    A missing GDK stays a warning, not an error, exactly as it was for the shim: the
+    offline provider is complete, and the practice match and the entire front end are
+    developed without a GDK. GameRuntimeProbe reports the runtime as unavailable and the
+    game degrades to offline.
+  -->
+  <PropertyGroup>
+    <GameRuntimeThunks Condition="'$(GameRuntimeThunks)' == ''">$(GameDKCoreLatest)windows\bin\x64\xgameruntime.thunks.dll</GameRuntimeThunks>
+  </PropertyGroup>
+
+  <Target Name="IncludeGameRuntimeThunks"
+          BeforeTargets="AssignTargetPaths"
+          Condition="'$(OS)' == 'Windows_NT'">
+    <Warning Condition="!Exists('$(GameRuntimeThunks)')"
+             Text="'xgameruntime.thunks.dll' was not found under the installed Microsoft GDK, so online features will be unavailable in this build. This is expected on a machine without the GDK." />
+    <ItemGroup>
+      <Content Include="$(GameRuntimeThunks)" Condition="Exists('$(GameRuntimeThunks)')">
+        <Link>xgameruntime.thunks.dll</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <Visible>false</Visible>
+      </Content>
+    </ItemGroup>
+  </Target>
+
+</Project>

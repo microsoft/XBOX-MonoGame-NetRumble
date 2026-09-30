@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The MonoGame front end: rendering, input, audio, screens and UI.
+
+    Targets WindowsDX12 (MonoGame 3.8.5's DirectX 12 backend, which shares its native
+    layer with the Xbox/GDK targets). The game is a 2D SpriteBatch title and uses no
+    advanced GPU features, so the backend choice is contained to this project.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <RollForward>Major</RollForward>
+    <PublishReadyToRun>false</PublishReadyToRun>
+    <TieredCompilation>false</TieredCompilation>
+    <MonoGamePlatform>WindowsDX12</MonoGamePlatform>
+    <RootNamespace>NetRumble.Game</RootNamespace>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Icon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MonoGame.Framework.Native" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Runtime.Windows.DX12" Version="3.8.5" />
+    <PackageReference Include="MonoGame.Content.Builder.Task" Version="3.8.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetRumble.Core\NetRumble.Core.csproj" />
+    <!--
+      The composition root lives in the GameCore assembly, so this is the one place
+      that references a concrete provider. Game code still only ever touches
+      IPlatformProvider. See docs/platform-abstraction.md.
+    -->
+    <ProjectReference Include="..\NetRumble.Platform.GameCore\NetRumble.Platform.GameCore.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!--
+      The SIL Open Font License requires the licence text to travel with any
+      redistribution of the font, and building the SpriteFonts embeds Selawik's glyphs in
+      the .xnb files - so this has to be in the shipped output, not just in the source
+      tree. See Content/Fonts/UI.spritefont for why the typeface is Selawik.
+    -->
+    <Content Include="Content\Fonts\Selawik-LICENSE.txt">
+      <Link>Licenses\Selawik-LICENSE.txt</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!--
+      XR-055. The SCID XSAPI initializes with, staged beside the executable so that a
+      desktop or dev-box run resolves the same configured value a packaged build does.
+      See src\NetRumble.Platform\XboxServicesConfiguration.cs.
+    -->
+    <Content Include="..\..\packaging\xboxservices.config">
+      <Link>xboxservices.config</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>
