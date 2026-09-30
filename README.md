@@ -45,7 +45,7 @@ sources build twice, for CoreCLR on the desktop and for XBOX Series X|S, and con
 > monitor issues and iterate where it makes sense. We would like to hear your feedback and
 > see your pull requests as this evolves.
 
-<img width="1920" height="1080" alt="XBOX MonoGame NetRumble sample banner, showing the game's NET.RUMBLE start screen signing in to XBOX" src="docs/images/netrumble_netrumble_hero.png" />
+<img width="1920" height="1080" alt="XBOX MonoGame NetRumble sample banner, showing the game's NET.RUMBLE start screen signing in to XBOX" src="docs/images/monogame_netrumble_hero.png" />
 
 ## Quickstart
 
