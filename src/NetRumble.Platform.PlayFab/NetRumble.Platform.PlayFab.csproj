@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    PlayFab over its public HTTPS/JSON API, in plain C#.
+
+    Why REST and not the native SDK
+    ====
+    The redistributable PlayFab binaries in this repo (PlayFabCore.dll,
+    PlayFabServices.dll, libHttpClient.dll) do export the whole authentication chain -
+    PFInitialize, PFAuthenticationLoginWithXUserAsync, PFEntityGetEntityKey and the
+    rest. They are nevertheless unusable from a P/Invoke caller, and the reason is
+    specific rather than a matter of effort:
+
+      * PFInitialize fails with 0x89240100 on desktop Win32 until local-storage
+        handlers are installed via PFPlatformLocalStorageSetHandlers.
+      * Those handlers signal completion through an XAsyncBlock.
+      * Not one of the shipped PlayFab or libHttpClient binaries exports a single
+        XAsync* or XTaskQueue* symbol (verified with dumpbin), so managed code has no
+        way to complete one.
+
+    That is a hard stop, so this project does not try. PlayFab's service surface is an
+    ordinary JSON API over HTTPS, documented and versioned, and every feature the game
+    needs - entity id, leaderboards, cloud save, lobby - is reachable that way. The
+    only thing the native SDK offered that HTTP cannot is the Xbox token, and that
+    comes from the GDK (XUserGetTokenAndSignatureAsync), not from PlayFab.
+
+    Consequences worth knowing
+    ====
+    This project is BCL-only. No GDK, no native dependency, no platform requirement.
+    It therefore builds and runs anywhere, and - crucially - LoginWithCustomID needs
+    no Xbox account at all, so the entire chain above it can be exercised end to end
+    on a plain dev box with nothing but a real title id.
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>NetRumble.Platform.PlayFab</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The spike drives the request builder and the envelope reader directly, against
+      a stub HttpMessageHandler, so that URL shape, header choice, error mapping and
+      token expiry can be proved without a title id or a network. Those are internals
+      because game code has no business reaching past the service interfaces.
+    -->
+    <InternalsVisibleTo Include="NetRumble.PlatformSpike" />
+    <InternalsVisibleTo Include="NetRumble.Platform.GameCore" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetRumble.Platform\NetRumble.Platform.csproj" />
+    <!--
+      For LocalFileGameSaveService. PlayFabGameSaveService inherits it rather than
+      reimplementing the local tier, which is what that class was left virtual for:
+      settings and match history are read before sign-in and must behave identically
+      whether or not a cloud tier exists.
+    -->
+    <ProjectReference Include="..\NetRumble.Platform.Offline\NetRumble.Platform.Offline.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,146 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The console build of xgameruntime.thunks.dll.
+
+  Microsoft ships this redistributable for the desktop only. GDK.Net P/Invokes the Gaming Runtime
+  through it, so without a console build none of GDK.Net's core families - runtime lifecycle, user
+  identity, privileges, game UI, activation - can load on Xbox. See XGameRuntimeThunks.cpp for the
+  mechanism, which is the same one upstream GDK.Net used for its own xgameruntime.extras.dll
+  before that shim was retired.
+
+  Built by tools\Build-Gdkx.ps1 and staged into the console package layout. Nothing references it
+  at compile time - it is resolved by name at run time, exactly like the desktop redistributable.
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Gaming.Xbox.Scarlett.x64">
+      <Configuration>Debug</Configuration>
+      <Platform>Gaming.Xbox.Scarlett.x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Gaming.Xbox.Scarlett.x64">
+      <Configuration>Release</Configuration>
+      <Platform>Gaming.Xbox.Scarlett.x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|Gaming.Xbox.XboxOne.x64">
+      <Configuration>Debug</Configuration>
+      <Platform>Gaming.Xbox.XboxOne.x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Gaming.Xbox.XboxOne.x64">
+      <Configuration>Release</Configuration>
+      <Platform>Gaming.Xbox.XboxOne.x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <RootNamespace>XGameRuntimeThunks</RootNamespace>
+    <ProjectGuid>{8A4C2F19-6D3B-4A77-91E5-0C8B2D4E6F31}</ProjectGuid>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <Keyword>Win32Proj</Keyword>
+    <MinimumVisualStudioVersion>15.0</MinimumVisualStudioVersion>
+    <TargetRuntime>Native</TargetRuntime>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup>
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <EmbedManifest>false</EmbedManifest>
+    <GenerateManifest>false</GenerateManifest>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' != '10.0'">$(DefaultPlatformToolset)</PlatformToolset>
+    <!-- The name GDK.Net's [LibraryImport] declarations resolve. -->
+    <TargetName>xgameruntime.thunks</TargetName>
+    <RepoRoot>$(MSBuildThisFileDirectory)..\..\</RepoRoot>
+    <!--
+      Deliberately not under artifacts\gdkx\$(Platform)\$(Configuration)\. That is
+      NetRumble.Bootstrap's OutDir, and the Gaming.Xbox platform stages an OutDir into the
+      package layout recursively - so a build folder nested inside it gets swept into
+      Layout\Image\Loose\ as a subfolder and MakePkg would ship a duplicate pair of DLLs
+      where nothing can load them.
+    -->
+    <OutDir>$(RepoRoot)artifacts\gdkx\thunks\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(RepoRoot)artifacts\gdkx\obj\thunks\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <UseDebugLibraries>false</UseDebugLibraries>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <PropertyGroup Label="UserMacros" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <PropertyGroup>
+    <ReferencePath>$(Console_SdkLibPath);$(Console_SdkWindowsMetadataPath)</ReferencePath>
+    <LibraryPath>$(Console_SdkLibPath)</LibraryPath>
+    <LibraryWPath>$(Console_SdkLibPath);$(Console_SdkWindowsMetadataPath)</LibraryWPath>
+    <IncludePath>$(Console_SdkIncludeRoot)</IncludePath>
+    <ExecutablePath>$(Console_SdkRoot)bin;$(Console_SdkToolPath);$(ExecutablePath)</ExecutablePath>
+    <!-- The GXDK's own import library, and the generated list of names to re-export from it. -->
+    <GdkxRuntimeLib>$([System.IO.Path]::GetFullPath('$(Console_SdkToolPath)..\..\lib\x64\xgameruntime.lib'))</GdkxRuntimeLib>
+    <GeneratedDefFile>$(IntDir)XGameRuntimeThunks.def</GeneratedDefFile>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <TreatWarningAsError>true</TreatWarningAsError>
+      <ExceptionHandling>false</ExceptionHandling>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <ModuleDefinitionFile>$(GeneratedDefFile)</ModuleDefinitionFile>
+      <AdditionalDependencies>$(GdkxRuntimeLib);%(AdditionalDependencies)</AdditionalDependencies>
+      <!--
+        The stubs are pulled in solely by the .def EXPORTS list; nothing in this module calls them,
+        so without this the linker would discard every one as unreferenced.
+      -->
+      <OptimizeReferences>false</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="XGameRuntimeThunks.cpp" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+
+  <Target Name="GenerateExportsDef" BeforeTargets="ClCompile">
+    <Error Condition="!Exists('$(GdkxRuntimeLib)')"
+           Text="The console xgameruntime.lib was not found at '$(GdkxRuntimeLib)'. Install the Microsoft GDK's Xbox extensions." />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Generate-Def.ps1&quot; -Library &quot;$(GdkxRuntimeLib)&quot; -OutputPath &quot;$(GeneratedDefFile)&quot; -DumpBin &quot;$(VC_ExecutablePath_x64)\dumpbin.exe&quot;" />
+  </Target>
+
+  <!--
+    This build used to also emit a copy named xgameruntime.extras.dll. GDK.Net once split
+    its bindings across two DLLs because Microsoft's desktop redistributable re-exported
+    only 355 of the stubs in xgameruntime.lib and GDK.Net supplied its own shim to reach
+    the rest. GDK edition 260404 exports 390, covering every API the projection offers, so
+    the shim was retired and everything binds to xgameruntime.thunks.dll. The copy is no
+    longer produced; this DLL, generated from the console lib's own export list, is the
+    only binding target.
+  -->
+
+</Project>

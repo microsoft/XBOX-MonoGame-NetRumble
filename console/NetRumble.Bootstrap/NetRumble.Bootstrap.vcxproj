@@ -1,0 +1,254 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The console executable.
+
+  On Xbox there is no .NET host: NetRumble.Game.GDKX is compiled ahead of time into an
+  object file, and this project is the native shell that links it. It contributes
+  wWinMain, starts the NativeAOT runtime and calls into the AOT-compiled managed Main.
+
+  This is deliberately MGRumble's own copy of NativeAOT-GDKX's Bootstrap project rather
+  than a reference to it. That sample project hardcodes the sample's own package identity
+  and pulls in FrameworkTests, whose own AOT output would overwrite ours. Owning the link
+  step here means the package carries NetRumble's real identity from
+  packaging/MicrosoftGame.config, which is what makes Xbox Live sign-in, achievements and
+  the leaderboard resolve against the actual title. The libraries that are genuinely
+  toolchain (the Xbox CoreCLR PAL and the two native BCL helpers) are still referenced
+  out of NativeAOT-GDKX rather than copied. See docs/xbox-console-build.md.
+-->
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Gaming.Xbox.Scarlett.x64">
+      <Configuration>Debug</Configuration>
+      <Platform>Gaming.Xbox.Scarlett.x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Gaming.Xbox.Scarlett.x64">
+      <Configuration>Release</Configuration>
+      <Platform>Gaming.Xbox.Scarlett.x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|Gaming.Xbox.XboxOne.x64">
+      <Configuration>Debug</Configuration>
+      <Platform>Gaming.Xbox.XboxOne.x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Gaming.Xbox.XboxOne.x64">
+      <Configuration>Release</Configuration>
+      <Platform>Gaming.Xbox.XboxOne.x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <RootNamespace>NetRumbleConsole</RootNamespace>
+    <ProjectGuid>{6E9E1A3C-3F1B-4E5B-9A21-5C2E0B7D41A9}</ProjectGuid>
+    <DefaultLanguage>en-US</DefaultLanguage>
+    <Keyword>Win32Proj</Keyword>
+    <MinimumVisualStudioVersion>15.0</MinimumVisualStudioVersion>
+    <TargetRuntime>Native</TargetRuntime>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+
+  <PropertyGroup Label="GdkxToolchain">
+    <NativeAotGdkxRoot Condition="'$(NativeAotGdkxRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\NativeAOT-GDKX\</NativeAotGdkxRoot>
+    <MonoGameRoot Condition="'$(MonoGameRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\MonoGame\</MonoGameRoot>
+    <RepoRoot>$(MSBuildThisFileDirectory)..\..\</RepoRoot>
+    <GdkxAotOutputDir>$(RepoRoot)artifacts\gdkx\</GdkxAotOutputDir>
+    <GdkxGameConfig Condition="'$(Platform)' == 'Gaming.Xbox.Scarlett.x64'">$(RepoRoot)packaging\MicrosoftGame.GDKX.Scarlett.config</GdkxGameConfig>
+    <GdkxGameConfig Condition="'$(Platform)' == 'Gaming.Xbox.XboxOne.x64'">$(RepoRoot)packaging\MicrosoftGame.GDKX.XboxOne.config</GdkxGameConfig>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <PropertyGroup>
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <EmbedManifest>false</EmbedManifest>
+    <GenerateManifest>false</GenerateManifest>
+    <PlatformToolset Condition="'$(VisualStudioVersion)' != '10.0'">$(DefaultPlatformToolset)</PlatformToolset>
+    <!-- The name packaging/MicrosoftGame.config declares for the console executable. -->
+    <TargetName>NetRumbleConsole</TargetName>
+    <OutDir>$(RepoRoot)artifacts\gdkx\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(RepoRoot)artifacts\gdkx\obj\$(Platform)\$(Configuration)\</IntDir>
+    <!--
+      The GDK stages its own package layout - the executable plus the Xbox CRT
+      redistributables the title needs - and defaults to doing so inside the project
+      directory. Keep the layout outside OutDir so the platform deploy step does not copy
+      the layout back into itself.
+    -->
+    <LayoutDir>$(RepoRoot)artifacts\gdkx\layout\$(Platform)\$(Configuration)\</LayoutDir>
+    <RemoveExtraDeployFiles>true</RemoveExtraDeployFiles>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Release'" Label="Configuration">
+    <UseDebugLibraries>false</UseDebugLibraries>
+    <WholeProgramOptimization>true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
+    <UseDebugLibraries>true</UseDebugLibraries>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings" />
+  <PropertyGroup Label="UserMacros" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <!-- Console builds resolve headers and libs out of the GXDK, never the desktop SDK. -->
+  <PropertyGroup>
+    <ReferencePath>$(Console_SdkLibPath);$(Console_SdkWindowsMetadataPath)</ReferencePath>
+    <LibraryPath>$(Console_SdkLibPath)</LibraryPath>
+    <LibraryWPath>$(Console_SdkLibPath);$(Console_SdkWindowsMetadataPath)</LibraryWPath>
+    <IncludePath>$(Console_SdkIncludeRoot)</IncludePath>
+    <ExecutablePath>$(Console_SdkRoot)bin;$(Console_SdkToolPath);$(ExecutablePath)</ExecutablePath>
+    <LinkIncremental Condition="'$(Configuration)'!='Debug'">false</LinkIncremental>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <Link>
+      <!-- The whole game, as one object file, produced by NetRumble.Game.GDKX's ILC step. -->
+      <AdditionalDependencies>$(GdkxAotOutputDir)compiled-IL-$(ConfigurationName).obj;$(NativeAotGdkxRoot)Runtime\$(Platform)\$(Configuration)\Runtime.lib;$(NativeAotGdkxRoot)System.Globalization.Native\$(Platform)\$(Configuration)\System.Globalization.Native.lib;$(NativeAotGdkxRoot)System.IO.Compression.Native\$(Platform)\$(Configuration)\System.IO.Compression.Native.lib;%(XboxExtensionsDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <SubSystem>Windows</SubSystem>
+      <StackReserveSize>16777216</StackReserveSize>
+      <StackCommitSize>1048576</StackCommitSize>
+    </Link>
+    <ClCompile>
+      <WarningLevel>Level4</WarningLevel>
+      <ConformanceMode>true</ConformanceMode>
+      <ExceptionHandling>false</ExceptionHandling>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
+    <Link>
+      <EnableCOMDATFolding>true</EnableCOMDATFolding>
+      <OptimizeReferences>true</OptimizeReferences>
+    </Link>
+    <ClCompile>
+      <Optimization>MaxSpeed</Optimization>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <FunctionLevelLinking>true</FunctionLevelLinking>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
+    <ClCompile>
+      <MinimalRebuild>false</MinimalRebuild>
+      <Optimization>Disabled</Optimization>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="Main.cpp" />
+  </ItemGroup>
+
+  <!--
+    Xbox reads the title's identity from a game config compiled into the executable, so
+    This is console-only so the devkit registers one executable for the selected
+    TargetDeviceFamily. The identity values still match the PC package config.
+  -->
+  <ItemGroup>
+    <MGCCompile Include="$(GdkxGameConfig)" />
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets" />
+
+  <Target Name="CleanGdkxStaleContentLayout" BeforeTargets="PrepareForLayout" Condition="'$(DesignTimeBuild)' != 'true'">
+    <RemoveDir Directories="$(OutDir)Content\Content" />
+    <RemoveDir Directories="$(LayoutDir)Contributors" />
+    <RemoveDir Directories="$(LayoutDir)Image\Loose\Content\Content" />
+  </Target>
+
+  <Target Name="BuildNativeGdkxDependencies" BeforeTargets="VerifyGdkxInputs" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="&quot;$(MSBuildToolsPath)\MSBuild.exe&quot; &quot;$(NativeAotGdkxRoot)Runtime\Runtime.vcxproj&quot; /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:PlatformToolset=$(PlatformToolset) /m /nologo /v:minimal" />
+    <Exec Command="&quot;$(MSBuildToolsPath)\MSBuild.exe&quot; &quot;$(NativeAotGdkxRoot)System.IO.Compression.Native\System.IO.Compression.Native.vcxproj&quot; /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:PlatformToolset=$(PlatformToolset) /m /nologo /v:minimal" />
+    <Exec Command="&quot;$(MSBuildToolsPath)\MSBuild.exe&quot; &quot;$(MonoGameRoot)GDKX\native\monogame\monogame.xbox.vcxproj&quot; /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:PlatformToolset=$(PlatformToolset) /m /nologo /v:minimal" />
+  </Target>
+
+  <Target Name="VerifyGdkxInputs" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(GdkxAotOutputDir)compiled-IL-$(ConfigurationName).obj')"
+           Text="No AOT output at '$(GdkxAotOutputDir)compiled-IL-$(ConfigurationName).obj'. Build src\NetRumble.Game.GDKX first, or use tools\Build-Gdkx.ps1. See docs/xbox-console-build.md." />
+    <Error Condition="!Exists('$(NativeAotGdkxRoot)Runtime\$(Platform)\$(Configuration)\Runtime.lib')"
+           Text="Runtime.lib for $(Platform)|$(Configuration) was not produced by NativeAOT-GDKX. See docs/xbox-console-build.md." />
+    <Error Condition="!Exists('$(NativeAotGdkxRoot)System.Globalization.Native\$(Platform)\$(Configuration)\System.Globalization.Native.lib')"
+           Text="System.Globalization.Native.lib for $(Platform)|$(Configuration) was not produced by NativeAOT-GDKX. See docs/xbox-console-build.md." />
+    <Error Condition="!Exists('$(NativeAotGdkxRoot)System.IO.Compression.Native\$(Platform)\$(Configuration)\System.IO.Compression.Native.lib')"
+           Text="System.IO.Compression.Native.lib for $(Platform)|$(Configuration) was not produced by NativeAOT-GDKX. See docs/xbox-console-build.md." />
+    <Error Condition="!Exists('$(MonoGameRoot)Artifacts\native\mgruntime\$(Platform)\$(Configuration)\mgruntime.dll')"
+           Text="mgruntime.dll for $(Platform)|$(Configuration) was not found. Run tools\Setup-Gdkx.ps1 to build MonoGame's native Xbox backend. See docs/xbox-console-build.md." />
+  </Target>
+
+  <!--
+    Stage the loose layout: MonoGame's native backend, the Gaming Runtime thunks, the
+    Xbox Live and PlayFab Party redistributables, the content the desktop build produced,
+    the store logos and the game config. This is the folder MakePkg consumes.
+
+    The Party, PlayFab and Xbox Live binaries come straight out of the GXDK rather than
+    from third_party\party\. Those vendored copies are Gaming.Desktop builds, kept in the
+    repo so the PC build and the platform spike work on a machine without the GDK; on
+    console the console builds are the only ones that will load.
+
+    The xgameruntime thunks DLL is different: it is not a redistributable at all here.
+    The GDK ships xgameruntime.thunks.dll for desktop only, and GDK.Net binds the flat API
+    to it, so console\XGameRuntimeThunks builds one from the console xgameruntime.lib.
+    See that project and docs/xbox-console-build.md.
+  -->
+  <Target Name="StageGdkxLayout" AfterTargets="Build">
+    <PropertyGroup>
+      <GdkxLooseDir>$(LayoutDir)Image\Loose\</GdkxLooseDir>
+      <GdkxStoreLogos>$(RepoRoot)storelogos\</GdkxStoreLogos>
+      <GdkxThunksDir>$(RepoRoot)artifacts\gdkx\thunks\$(Platform)\$(Configuration)\</GdkxThunksDir>
+      <!--
+        The GXDK's redistributable binaries. Console_SdkRoot is the unversioned install
+        root, so the versioned Xbox folder is derived from the tool path instead.
+      -->
+      <GdkxRedistDir>$([System.IO.Path]::GetFullPath('$(Console_SdkToolPath)..\x64\'))</GdkxRedistDir>
+    </PropertyGroup>
+    <ItemGroup>
+      <GdkxLayoutContent Include="$(GdkxAotOutputDir)Content\**\*" />
+      <GdkxLayoutLogo Include="$(GdkxStoreLogos)**\*" />
+      <GdkxLayoutBinary Include="$(TargetPath)" />
+      <GdkxLayoutBinary Include="$(MonoGameRoot)Artifacts\native\mgruntime\$(Platform)\$(Configuration)\mgruntime.dll" />
+      <GdkxLayoutBinary Include="$(GdkxThunksDir)xgameruntime.thunks.dll" />
+      <GdkxLayoutBinary Include="$(GdkxRedistDir)Party.dll" />
+      <GdkxLayoutBinary Include="$(GdkxRedistDir)PlayFabCore.dll" />
+      <GdkxLayoutBinary Include="$(GdkxRedistDir)PlayFabServices.dll" />
+      <GdkxLayoutBinary Include="$(GdkxRedistDir)libHttpClient.dll" />
+      <GdkxLayoutBinary Include="$(GdkxRedistDir)Microsoft.Xbox.Services.C.Thunks.dll" />
+      <!--
+        XR-055. The SCID XSAPI is initialized with. Without it the title derives one from
+        the title id, which is correct only for a title on the default service
+        configuration and otherwise fails at the first achievement write rather than at
+        initialization. See src\NetRumble.Platform\XboxServicesConfiguration.cs.
+      -->
+      <GdkxLayoutBinary Include="$(RepoRoot)packaging\xboxservices.config" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(GdkxRedistDir)Party.dll')"
+           Text="PlayFab Party was not found at '$(GdkxRedistDir)'. It ships with the GDK's Xbox extensions; the console build cannot use the Gaming.Desktop copies in third_party\party\." />
+    <Error Condition="!Exists('$(GdkxRedistDir)PlayFabCore.dll')"
+           Text="PlayFab Core was not found at '$(GdkxRedistDir)'. It ships with the GDK's Xbox extensions and is required for PlayFab sign-in." />
+    <Error Condition="!Exists('$(GdkxRedistDir)PlayFabServices.dll')"
+           Text="PlayFab Services was not found at '$(GdkxRedistDir)'. It ships with the GDK's Xbox extensions and is required by PlayFabRuntime.Initialize()." />
+    <Error Condition="!Exists('$(GdkxThunksDir)xgameruntime.thunks.dll')"
+           Text="The console Gaming Runtime thunks were not found at '$(GdkxThunksDir)'. Build console\XGameRuntimeThunks\XGameRuntimeThunks.vcxproj, or use tools\Build-Gdkx.ps1." />
+    <Error Condition="!Exists('$(GdkxStoreLogos)StoreLogo.png')"
+           Text="StoreLogo.png was not found in the repository storelogos folder at '$(GdkxStoreLogos)'." />
+    <Error Condition="!Exists('$(GdkxStoreLogos)Logo.png')"
+           Text="Logo.png was not found in the repository storelogos folder at '$(GdkxStoreLogos)'." />
+    <Error Condition="!Exists('$(GdkxStoreLogos)SmallLogo.png')"
+           Text="SmallLogo.png was not found in the repository storelogos folder at '$(GdkxStoreLogos)'." />
+    <Error Condition="!Exists('$(GdkxStoreLogos)LargeLogo.png')"
+           Text="LargeLogo.png was not found in the repository storelogos folder at '$(GdkxStoreLogos)'." />
+    <Error Condition="!Exists('$(GdkxStoreLogos)SplashScreen.png')"
+           Text="SplashScreen.png was not found in the repository storelogos folder at '$(GdkxStoreLogos)'." />
+    <Copy SourceFiles="$(GdkxThunksDir)xgameruntime.thunks.dll"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GdkxLayoutBinary)" DestinationFolder="$(GdkxLooseDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GdkxLayoutContent)" DestinationFiles="@(GdkxLayoutContent->'$(GdkxLooseDir)Content\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(GdkxLayoutLogo)" DestinationFiles="@(GdkxLayoutLogo->'$(GdkxLooseDir)storelogos\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="Console layout staged at $(GdkxLooseDir)" />
+  </Target>
+
+</Project>

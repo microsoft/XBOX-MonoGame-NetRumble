@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The platform ABSTRACTION.
+
+    This assembly is deliberately dependency-free: no P/Invoke, no native SDK
+    references, no MonoGame, no System.Runtime.InteropServices usage.
+    It is the contract that every provider implements:
+
+      - NetRumble.Platform.Offline    (no-op, runs on an unconfigured dev box)
+      - NetRumble.Platform.GameCore   (P/Invoke over the native GDK/PlayFab DLLs)
+      - <future> NetRumble.Platform.GdkSharp (a standalone C# GDK)
+
+    If you find yourself adding a PackageReference or a DllImport here, the
+    layering has been violated. See ../../docs/platform-abstraction.md.
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>NetRumble.Platform</RootNamespace>
+  </PropertyGroup>
+
+</Project>

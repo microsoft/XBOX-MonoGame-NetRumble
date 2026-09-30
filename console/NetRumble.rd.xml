@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Runtime directives for the console build.
+
+  NativeAOT removes everything it cannot see a static call path to, so anything reached
+  only reflectively has to be named explicitly:
+
+    NetRumble.Core
+        Content is deserialized by MonoGame's ReflectiveReader for any type the pipeline
+        wrote reflectively, and the game's data types live here.
+
+  NetRumble.Platform.PlayFab used to be rooted here too, because PlayFabRestClient
+  serialized through body.GetType() and ILC cannot follow that. Every request body now
+  goes through the source-generated PlayFabJsonContext, so there is a static call path
+  and the rooting is no longer needed - which is the better outcome anyway: rooting a
+  whole assembly costs binary size, silently covers up new reflective code as endpoints
+  are added, and stops working under trimming. Do not add it back; add the request type
+  to PlayFabJsonContext instead, which the compiler now requires.
+
+  MonoGame's own ContentReaders are rooted separately by NativeAOT-GDKX's Common\rd.xml,
+  which is passed to ILC alongside this file - see NetRumble.Game.GDKX.csproj.
+-->
+<Directives>
+    <Application>
+        <Assembly Name="NetRumble.Core" Dynamic="Required All" />
+    </Application>
+</Directives>

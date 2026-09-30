@@ -1,0 +1,211 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The Xbox (GDKX) flavour of the game.
+
+    This project owns no source of its own: it compiles the *same* files as
+    NetRumble.Game. Only the plumbing underneath differs.
+
+    Desktop and console share MonoGame's "native" architecture, which is why the game
+    sources need no #if at all. Desktop consumes the managed framework from the
+    MonoGame.Framework.Native NuGet package with the WindowsDX12 runtime beside it;
+    console consumes the same managed framework from source and pairs it with
+    mgruntime.dll built from MonoGame.XB1's native Xbox backend (native/monogame, the
+    GDKX overlay). See docs/xbox-console-build.md.
+
+    Two things force this to be a separate project rather than another configuration of
+    NetRumble.Game:
+      * the target framework. Desktop is net9.0-windows; the console build must be
+        net8.0, because the only NativeAOT compiler that can produce Xbox OS code is the
+        8.0.1 ILCompiler that NativeAOT-GDKX pins.
+      * the output shape. NativeAOT compiles this assembly into an object file that a
+        native bootstrapper links, so there is no app host and no self-contained publish.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>NetRumble.Game</RootNamespace>
+    <AssemblyName>NetRumble.Game</AssemblyName>
+    <DefineConstants>$(DefineConstants);GDKX</DefineConstants>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <UseAppHost>false</UseAppHost>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <GameSourceDir>$(MSBuildThisFileDirectory)..\NetRumble.Game\</GameSourceDir>
+    <DesktopGameProject>$(GameSourceDir)NetRumble.Game.csproj</DesktopGameProject>
+  </PropertyGroup>
+
+  <!--
+    The GDKX toolchain is two external repositories, neither of which is on NuGet:
+      MonoGameRoot       a MonoGame checkout with MonoGame.XB1's GDKX overlay laid out
+                         inside it as GDKX/ - the path its own projects expect.
+      NativeAotGdkxRoot  the NativeAOT-GDKX repo: the ILC invocation, the Xbox CoreCLR
+                         PAL and the native bootstrapper that links the AOT output.
+    Both default to the sibling layout tools/Setup-Gdkx.ps1 creates.
+  -->
+  <PropertyGroup>
+    <MonoGameRoot Condition="'$(MonoGameRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\MonoGame\</MonoGameRoot>
+    <NativeAotGdkxRoot Condition="'$(NativeAotGdkxRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\NativeAOT-GDKX\</NativeAotGdkxRoot>
+    <MonoGameFrameworkProject>$(MonoGameRoot)MonoGame.Framework\MonoGame.Framework.Native.csproj</MonoGameFrameworkProject>
+    <MonoGameXboxNativeProject>$(MonoGameRoot)GDKX\native\monogame\monogame.xbox.vcxproj</MonoGameXboxNativeProject>
+
+    <!-- Which console, and the C++ toolset the native halves are built with. -->
+    <GdkxConsolePlatform Condition="'$(GdkxConsolePlatform)' == ''">Gaming.Xbox.Scarlett.x64</GdkxConsolePlatform>
+    <GdkxPlatformToolset Condition="'$(GdkxPlatformToolset)' == ''">v145</GdkxPlatformToolset>
+  </PropertyGroup>
+
+  <Target Name="VerifyGdkxToolchain" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(MonoGameFrameworkProject)')"
+           Text="MonoGame.Framework.Native was not found at '$(MonoGameFrameworkProject)'. Run tools/Setup-Gdkx.ps1, or set MonoGameRoot. See docs/xbox-console-build.md." />
+    <Error Condition="!Exists('$(MonoGameXboxNativeProject)')"
+           Text="The GDKX overlay was not found at '$(MonoGameXboxNativeProject)'. It is MonoGame.XB1's develop branch, checked out inside the MonoGame tree as GDKX/. Run tools/Setup-Gdkx.ps1. See docs/xbox-console-build.md." />
+  </Target>
+
+  <ItemGroup>
+    <Compile Include="$(GameSourceDir)**\*.cs" Exclude="$(GameSourceDir)bin\**\*.cs;$(GameSourceDir)obj\**\*.cs" LinkBase="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="$(MonoGameFrameworkProject)" />
+    <ProjectReference Include="..\NetRumble.Core\NetRumble.Core.csproj" />
+    <ProjectReference Include="..\NetRumble.Platform.GameCore\NetRumble.Platform.GameCore.csproj" />
+  </ItemGroup>
+
+  <!--
+    NativeAOT. The Xbox OS cannot host CoreCLR, so the managed assemblies are compiled
+    ahead of time into a single object file and linked into a native executable by
+    NativeAOT-GDKX's Bootstrap project. The ILCompiler version is pinned to the one that
+    repo's Xbox PAL was built against - 8.0.1 - which is also why this project targets
+    net8.0.
+
+    This mirrors NativeAOT_Console.targets from that repo rather than importing it: that
+    file hardcodes its own demo game's assembly list and resolves everything through
+    $(SolutionDir), which only works for a project physically added to its solution.
+    Everything version- or path-specific is a property here instead.
+  -->
+  <PropertyGroup>
+    <IlcVersion>8.0.1</IlcVersion>
+    <IlcHostPath>$(NuGetPackageRoot)runtime.win-x64.microsoft.dotnet.ilcompiler\$(IlcVersion)</IlcHostPath>
+    <GdkxAotOutputDir>$(MSBuildThisFileDirectory)..\..\artifacts\gdkx\</GdkxAotOutputDir>
+    <GdkxAotCompile Condition="'$(GdkxAotCompile)' == ''">true</GdkxAotCompile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="runtime.win-x64.Microsoft.DotNet.ILCompiler" Version="8.0.1" ExcludeAssets="all" GeneratePathProperty="true" />
+  </ItemGroup>
+
+  <Target Name="CleanGdkxStagedContent" BeforeTargets="GdkxAotCompile" Condition="'$(GdkxAotCompile)' == 'true'">
+    <RemoveDir Directories="$(GdkxAotOutputDir)Content" />
+    <RemoveDir Directories="$(TargetDir)Content\Content" />
+  </Target>
+
+  <Target Name="GdkxAotCompile" AfterTargets="Build" Condition="'$(GdkxAotCompile)' == 'true'">
+    <Error Condition="!Exists('$(IlcHostPath)\tools\ilc.exe')"
+           Text="The 8.0.1 ILCompiler was not found at '$(IlcHostPath)'. Restore this project to fetch it." />
+    <Error Condition="!Exists('$(NativeAotGdkxRoot)Common\rd.xml')"
+           Text="NativeAOT-GDKX was not found at '$(NativeAotGdkxRoot)'. Run tools/Setup-Gdkx.ps1, or set NativeAotGdkxRoot. See docs/xbox-console-build.md." />
+
+    <!--
+      Every managed assembly beside the game is a reference for the compiler; the game
+      assembly itself is the input. Globbing rather than listing them means adding a
+      provider assembly to the game does not silently drop it from the console build.
+    -->
+    <ItemGroup>
+      <GdkxIlcReference Include="$(TargetDir)*.dll" Exclude="$(TargetPath);$(TargetDir)mgruntime.dll;$(TargetDir)*.Native.dll" />
+    </ItemGroup>
+    <PropertyGroup>
+      <GdkxIlcReferences>@(GdkxIlcReference->'-r:&quot;%(FullPath)&quot;', ' ')</GdkxIlcReferences>
+      <GdkxIlcFlags Condition="'$(Configuration)' == 'Debug'">-g</GdkxIlcFlags>
+    </PropertyGroup>
+
+    <MakeDir Directories="$(GdkxAotOutputDir)" />
+    <Message Importance="high" Text="Compiling $(TargetFileName) ahead of time for $(GdkxConsolePlatform)..." />
+
+    <Exec Command="&quot;$(IlcHostPath)\tools\ilc.exe&quot; &quot;$(TargetPath)&quot; --targetos:windows --targetarch:x64 -O $(GdkxIlcReferences) --dehydrate --generateunmanagedentrypoints:System.Private.CoreLib --initassembly:System.Private.CoreLib --initassembly:System.Private.StackTraceMetadata --initassembly:System.Private.TypeLoader --initassembly:System.Private.Reflection.Execution --directpinvokelist:&quot;$(NativeAotGdkxRoot)Common\WindowsAPIs-GDKX.txt&quot; --directpinvoke:System.Globalization.Native --directpinvoke:System.IO.Compression.Native --directpinvoke:Bootstrap --stacktracedata --scanreflection --nowarn:&quot;1701;1702;IL2026;IL2041;IL2042;IL2043;IL2045;IL2046;IL2050;IL2032;IL2055;IL2056;IL2057;IL2058;IL2059;IL2060;IL2061;IL2062;IL2063;IL2064;IL2065;IL2066;IL2067;IL2068;IL2069;IL2070;IL2071;IL2072;IL2073;IL2074;IL2075;IL2076;IL2077;IL2078;IL2079;IL2080;IL2081;IL2082;IL2083;IL2084;IL2085;IL2086;IL2087;IL2088;IL2089;IL2090;IL2091;IL2092;IL2093;IL2094;IL2095;IL2096;IL2097;IL2098;IL2099;IL2008;IL2009;IL2037&quot; --singlewarn --feature:System.Globalization.Invariant=true --feature:System.Globalization.PredefinedCulturesOnly=true --feature:System.Runtime.Serialization.EnableUnsafeBinaryFormatterSerialization=false --feature:System.Diagnostics.Tracing.EventSource.IsSupported=false --feature:System.Resources.ResourceManager.AllowCustomResourceTypes=false --feature:System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported=false --rdxml:&quot;$(NativeAotGdkxRoot)Common\rd.xml&quot; --rdxml:&quot;$(MSBuildThisFileDirectory)..\..\console\NetRumble.rd.xml&quot; -o:&quot;$(GdkxAotOutputDir)compiled-IL-$(Configuration).obj&quot; -r:&quot;$(IlcHostPath)\framework\*.dll&quot; -r:&quot;$(IlcHostPath)\sdk\*.dll&quot; $(GdkxIlcFlags)" />
+
+    <!-- Bootstrap copies the loose layout's content out of the same staging folder. -->
+    <ItemGroup>
+      <GdkxStagedContent Include="$(TargetDir)Content\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(GdkxStagedContent)" DestinationFiles="@(GdkxStagedContent->'$(GdkxAotOutputDir)Content\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!--
+    Content is built once, by the desktop project, and consumed here as-is. MonoGame's
+    ContentReader checks the XNB platform byte against the list of platforms it knows,
+    not against the one it is running on, and this title's textures, SpriteFonts and
+    PCM/MP3 audio load unchanged on console.
+
+    Compiled effects are the one exception, and this title has one. An .mgfxo carries a
+    shader profile byte that Effect.ReadHeader compares against the running backend's
+    own - 22 on Xbox Series, 21 on Xbox One, 2 on desktop DirectX 12 - so a desktop-built
+    effect throws "This MGFX effect was built for a different platform!" on console.
+    tools\Build-ConsoleShaders.ps1 builds the effects a second time with the GDK shader
+    profile, and this project stages those over the desktop ones. See docs/xbox-console-build.md.
+  -->
+  <PropertyGroup>
+    <!--
+      Where the desktop build left the compiled content. The MGCB task names the folder
+      after the desktop MonoGamePlatform, so this tracks NetRumble.Game.csproj's
+      WindowsDX12 rather than being a path anyone should hand-edit.
+    -->
+    <GdkxContentDir Condition="'$(GdkxContentDir)' == ''">$(GameSourceDir)Content\bin\WindowsDX12\Content\</GdkxContentDir>
+
+    <!-- The shader profile matching the console this package targets. -->
+    <GdkxShaderProfile Condition="'$(GdkxShaderProfile)' == '' and '$(GdkxConsolePlatform)' == 'Gaming.Xbox.XboxOne.x64'">XboxOne</GdkxShaderProfile>
+    <GdkxShaderProfile Condition="'$(GdkxShaderProfile)' == ''">XboxSeries</GdkxShaderProfile>
+
+    <GdkxConsoleContentDir Condition="'$(GdkxConsoleContentDir)' == ''">$(GameSourceDir)Content\bin\$(GdkxShaderProfile)\Content\</GdkxConsoleContentDir>
+    <GdkxHasConsoleEffects>false</GdkxHasConsoleEffects>
+    <GdkxHasConsoleEffects Condition="Exists('$(GdkxConsoleContentDir)Effects')">true</GdkxHasConsoleEffects>
+  </PropertyGroup>
+
+  <Target Name="BuildDesktopContentForGdkx" BeforeTargets="VerifyGdkxContent" Condition="!Exists('$(GdkxContentDir)')">
+    <MSBuild Projects="$(DesktopGameProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);NoWarn=NU1603" />
+  </Target>
+
+  <Target Name="VerifyGdkxContent" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(GdkxContentDir)')"
+           Text="No compiled content at '$(GdkxContentDir)'. Build NetRumble.Game first - the console flavour consumes the content the desktop build produces. See docs/xbox-console-build.md." />
+
+    <!--
+      A warning rather than an error: the renderer treats an unusable effect as "draw the
+      pass unlit", so a machine without the MonoGame GDKX overlay can still produce a
+      playable package. It just does not get the lighting pass, which is not something to
+      discover from a screenshot.
+    -->
+    <Warning Condition="'$(GdkxHasConsoleEffects)' != 'true' and Exists('$(GdkxContentDir)Effects')"
+             Text="No $(GdkxShaderProfile) effects at '$(GdkxConsoleContentDir)Effects'. The console build will stage desktop shaders, which it cannot load, and space objects will draw unlit. Run tools\Build-ConsoleShaders.ps1. See docs/xbox-console-build.md." />
+  </Target>
+
+  <ItemGroup>
+    <!--
+      Everything the content build produced, not just the .xnb. A Song compiles to a
+      131-byte .xnb stub that holds only the file name of the real audio next to it -
+      SongReader opens that file at runtime - so a *.xnb-only glob stages the stub and
+      drops the 9 MB OneStepBeyond.m4a, and the console build comes up silent.
+
+      Effects come from the console content build instead when there is one; they are
+      the only profile-specific asset kind here.
+    -->
+    <Content Include="$(GdkxContentDir)**\*" Exclude="$(GdkxContentDir)Effects\**\*" Condition="'$(GdkxHasConsoleEffects)' == 'true'">
+      <Link>Content\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(GdkxConsoleContentDir)Effects\**\*" Condition="'$(GdkxHasConsoleEffects)' == 'true'">
+      <Link>Content\Effects\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(GdkxContentDir)**\*" Condition="'$(GdkxHasConsoleEffects)' != 'true'">
+      <Link>Content\%(RecursiveDir)%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="$(GameSourceDir)Content\Fonts\Selawik-LICENSE.txt">
+      <Link>Licenses\Selawik-LICENSE.txt</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

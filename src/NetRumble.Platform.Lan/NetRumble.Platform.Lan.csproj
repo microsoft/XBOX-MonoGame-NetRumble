@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The LAN provider: a real UDP transport behind IPartyService.
+
+    It exists because every other implementation of IPartyService is a double.
+    OfflinePartyService has no network at all, GameCorePartyService cannot get past
+    the PlayFab credential gate (see docs/design-notes.md), and the spike's
+    LoopbackPartyService delivers bytes in-process. None of them ever put a packet on
+    a socket, so nothing exercised serialisation across a process boundary, the MTU
+    limit on a WorldSnapshot, packet loss, or reordering.
+
+    This does. It is deliberately BCL-only - System.Net.Sockets and nothing else - so
+    it builds and runs on any dev box with no GDK, no PlayFab title and no account.
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>NetRumble.Platform.Lan</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      The spike drives LanLink's reliability and sequencing rules directly, feeding
+      fragments in an order a real socket cannot be made to produce on demand. That is
+      the only way to prove the stale-snapshot drop and the reliable reordering buffer
+      deterministically, so the transport internals are visible to it and nothing else.
+    -->
+    <InternalsVisibleTo Include="NetRumble.PlatformSpike" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetRumble.Platform\NetRumble.Platform.csproj" />
+  </ItemGroup>
+
+</Project>

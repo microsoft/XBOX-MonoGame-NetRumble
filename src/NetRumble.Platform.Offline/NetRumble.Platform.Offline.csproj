@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The OFFLINE provider: a complete, dependency-free implementation of
+    NetRumble.Platform used when no native runtime is present.
+
+    It exists for three reasons:
+      1. The game must run on an unconfigured dev box (no GDK, no PlayFab title).
+         This preserves the Godot port's behaviour, where the front end and the
+         practice match worked with the extensions missing.
+      2. It is the reference implementation. If a new interface member cannot be
+         implemented sensibly here, the abstraction is probably leaking native detail.
+      3. It keeps NetRumble.Core unit-testable without any SDK.
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>NetRumble.Platform.Offline</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetRumble.Platform\NetRumble.Platform.csproj" />
+  </ItemGroup>
+
+</Project>

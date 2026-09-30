@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The engine-agnostic game: simulation, match flow, tuning and the netcode message
+    layer.
+
+    Deliberately has NO MonoGame reference. Keeping the simulation free of the
+    rendering framework is what makes it unit-testable without a GPU, and it preserves
+    the World (pure simulation) / MatchDirector (match flow) split that the Godot port
+    already had.
+  -->
+
+  <PropertyGroup>
+    <RootNamespace>NetRumble.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NetRumble.Platform\NetRumble.Platform.csproj" />
+  </ItemGroup>
+
+</Project>
