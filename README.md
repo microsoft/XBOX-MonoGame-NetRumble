@@ -35,10 +35,6 @@ sources build twice, for CoreCLR on the desktop and for XBOX Series X|S, and con
 `#if` for either target. That boundary is the most reusable part of the sample. See
 [Platform abstraction](docs/platform-abstraction.md).
 
-This is a port of the GDScript
-[XBOX Godot NetRumble](https://github.com/microsoft/XBOX-Godot-NetRumble) sample. The two
-share a title identity, an arsenal and a set of platform decisions.
-
 > [!IMPORTANT]
 > **This is a source-only sample rather than a shipping game.** NetRumble is MIT licensed
 > at the game layer. The Microsoft GDK, PlayFab, Party and
@@ -48,6 +44,8 @@ share a title identity, an arsenal and a set of platform decisions.
 > There is no fixed update cadence for support or maintenance. We watch the repository,
 > monitor issues and iterate where it makes sense. We would like to hear your feedback and
 > see your pull requests as this evolves.
+
+<img width="1920" height="1080" alt="XBOX MonoGame NetRumble sample banner, showing the game's NET.RUMBLE start screen signing in to XBOX" src="docs/images/monogame_netrumble_hero.png" />
 
 ## Quickstart
 
