@@ -463,6 +463,11 @@ public sealed class LobbyScreen : Screen
             return true;
         }
 
+        if (action == MenuAction.Accept && context.Input.Pressed(MenuAction.ToggleReady))
+        {
+            return false;
+        }
+
         if (action == MenuAction.VoiceChat)
         {
             OnVoiceChatToggled(context);
