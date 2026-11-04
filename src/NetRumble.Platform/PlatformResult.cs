@@ -113,6 +113,8 @@ public enum PlatformStatus
     /// <summary>The call needs a signed-in user and there isn't one.</summary>
     NotSignedIn,
 
+    SessionNotJoinable,
+
     /// <summary>The account lacks the required privilege (XR-045).</summary>
     NoPrivilege,
 

@@ -325,9 +325,10 @@ internal sealed class PlayFabRestClient : IDisposable
         var diagnostics =
             $"POST {path} -> {(int)statusCode} {errorName} ({errorCode}): {errorMessage}";
 
+        var status = MapStatus(path, statusCode, errorCode);
         return PlatformResult<JsonElement>.Fail(
-            MapStatus(statusCode, errorCode),
-            DescribeForPlayer(statusCode, errorCode),
+            status,
+            DescribeForPlayer(status),
             diagnostics);
     }
 
@@ -340,8 +341,14 @@ internal sealed class PlayFabRestClient : IDisposable
     /// nobody maintains and callers that switch on values they have never seen. The
     /// exact code is preserved in the diagnostics string for whoever is reading a log.
     /// </remarks>
-    private static PlatformStatus MapStatus(HttpStatusCode statusCode, int errorCode)
-        => (statusCode, errorCode) switch
+    private static PlatformStatus MapStatus(string path, HttpStatusCode statusCode, int errorCode)
+    {
+        if (path == "/Lobby/JoinLobby" && errorCode == 13003)
+        {
+            return PlatformStatus.SessionNotJoinable;
+        }
+
+        return (statusCode, errorCode) switch
         {
             // 1000 InvalidParams and 1001 AccountNotFound arrive as 400s but mean the
             // caller is not who it claims, which is a sign-in problem to the player.
@@ -360,10 +367,12 @@ internal sealed class PlayFabRestClient : IDisposable
 
             _ => PlatformStatus.Failed,
         };
+    }
 
-    private static string DescribeForPlayer(HttpStatusCode statusCode, int errorCode)
-        => MapStatus(statusCode, errorCode) switch
+    private static string DescribeForPlayer(PlatformStatus status)
+        => status switch
         {
+            PlatformStatus.SessionNotJoinable => "This match is full or no longer accepts players.",
             PlatformStatus.NotSignedIn => "Your session has expired. Sign in again to continue.",
             PlatformStatus.NetworkFailure => "The online service is busy. Try again in a moment.",
             PlatformStatus.TimedOut => "The online service did not respond in time.",
