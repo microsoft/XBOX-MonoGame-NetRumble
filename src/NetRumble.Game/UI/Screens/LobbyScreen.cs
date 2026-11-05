@@ -842,7 +842,7 @@ public sealed class LobbyScreen : Screen
         // up the session.
         var verdict = await context.Platform.Privileges.EnsureAsync(GamePrivilege.Multiplayer);
 
-        if (_transitioning || context.Screens.Current is not LobbyScreen)
+        if (_transitioning || context.Screens.Find<LobbyScreen>() != this)
         {
             return;
         }
