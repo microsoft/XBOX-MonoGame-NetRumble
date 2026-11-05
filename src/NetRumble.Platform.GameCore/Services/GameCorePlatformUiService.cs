@@ -16,13 +16,7 @@ namespace NetRumble.Platform.GameCore.Services;
 /// two-call result-size pattern and the UTF-8 buffer.
 /// </para>
 /// <para>
-/// <b>Account picker has no dedicated GDK entry point.</b> It is the same
-/// <c>XUserAddAsync</c> called with <c>AddDefaultUserAllowingUI</c>, which is what
-/// actually shows the chooser - not a re-run of the check→silent→UI sign-in chain,
-/// because a silent attempt for an already-signed-in user succeeds immediately and the
-/// picker never appears. The resulting <see cref="User"/> is handed to
-/// <see cref="GameCoreIdentityService.Adopt"/> so the rest of the provider picks up the
-/// (possibly new) account exactly as it would from a normal sign-in.
+/// <b>Account picker has no dedicated GDK entry point.</b>
 /// </para>
 /// <para>
 /// <b>Unverifiable in this environment.</b> Both surfaces need an interactive session
@@ -104,7 +98,7 @@ internal sealed class GameCorePlatformUiService : IPlatformUiService
         {
             user = await _runtime.Dispatcher
                 .Marshal(_runtime.Runtime.Users.AddAsync(
-                    UserAddOptions.AddDefaultUserAllowingUI,
+                    UserAddOptions.None,
                     cancellationToken))
                 .ConfigureAwait(false);
         }
@@ -117,6 +111,26 @@ internal sealed class GameCorePlatformUiService : IPlatformUiService
         catch (OperationCanceledException)
         {
             return PlatformResult.Canceled();
+        }
+
+        string selectedAccountId;
+        try
+        {
+            selectedAccountId = user.Id.ToString();
+        }
+        catch (GameRuntimeException ex)
+        {
+            user.Dispose();
+            return PlatformResult.Fail(
+                PlatformStatus.Failed,
+                "The selected account could not be read.",
+                ex.GetType().Name);
+        }
+
+        if (string.Equals(_identity.CurrentUser?.LocalId, selectedAccountId, StringComparison.Ordinal))
+        {
+            user.Dispose();
+            return PlatformResult.Ok();
         }
 
         var adopted = _identity.Adopt(user);
