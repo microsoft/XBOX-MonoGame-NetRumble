@@ -73,6 +73,8 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
 
     private readonly GameCoreRuntime _runtime;
     private readonly GameCoreIdentityService _identity;
+    private readonly SemaphoreSlim _providerGate = new(1, 1);
+    private readonly object _stateLock = new();
 
     private GameSaveProvider? _provider;
     private User? _boundUser;
@@ -126,13 +128,14 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
                 $"connected-storage blob at {MaxCloudBytes} bytes.");
         }
 
-        if (!TryGetProvider(out var provider))
-        {
-            return PlatformResult.Unavailable();
-        }
-
         try
         {
+            var provider = await GetProviderAsync(cancellationToken).ConfigureAwait(false);
+            if (provider is null)
+            {
+                return PlatformResult.Unavailable();
+            }
+
             // The container handle and the update are both native resources with a
             // defined lifetime, and an update that is never submitted is discarded - so
             // a cancellation or a throw between CreateUpdate and Submit leaves nothing
@@ -178,13 +181,14 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
                 "LoadCloudAsync called with an empty key.");
         }
 
-        if (!TryGetProvider(out var provider))
-        {
-            return PlatformResult<byte[]>.Unavailable();
-        }
-
         try
         {
+            var provider = await GetProviderAsync(cancellationToken).ConfigureAwait(false);
+            if (provider is null)
+            {
+                return PlatformResult<byte[]>.Unavailable();
+            }
+
             using var container = provider.CreateContainer(ContainerName);
 
             // Asking for a blob that is not there is an error at this API, not an empty
@@ -235,53 +239,50 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
     /// progress into another player's roamed container - the XR-052 failure, in the one
     /// place where it would also be replicated to every device that account owns.
     /// </remarks>
-    private bool TryGetProvider(out GameSaveProvider provider)
+    private async Task<GameSaveProvider?> GetProviderAsync(CancellationToken cancellationToken)
     {
-        provider = null!;
-
-        if (_disposed || !_runtime.IsInitialized)
-        {
-            return false;
-        }
-
-        if (!_identity.TryGetUser(out var user))
-        {
-            ReleaseProvider();
-            return false;
-        }
-
-        if (_provider is not null && ReferenceEquals(_boundUser, user))
-        {
-            provider = _provider;
-            return true;
-        }
-
-        ReleaseProvider();
+        await _providerGate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         try
         {
+            if (_disposed || !_runtime.IsInitialized)
+            {
+                return null;
+            }
+
+            if (!_identity.TryGetUser(out var user))
+            {
+                ReleaseProvider();
+                return null;
+            }
+
+            if (_provider is not null && ReferenceEquals(_boundUser, user))
+            {
+                return _provider;
+            }
+
+            ReleaseProvider();
+
             var titleId = GameLauncher.GetXboxTitleId();
             var configuration = XboxServicesConfiguration.Resolve(
                 titleId, Environment.GetCommandLineArgs());
 
-            // Synchronous rather than the async overload: this runs behind a save or load
-            // that is already off the game thread, and the initialize is what every
-            // subsequent call on this provider depends on, so there is nothing useful to
-            // overlap it with. syncOnDemand stays false - the platform syncs the
-            // container up front, which is what makes the first read after a device
-            // change return that other device's data rather than this one's stale copy.
-            _provider = GameSaveProvider.Initialize(
-                user, configuration.Scid, syncOnDemand: false);
+            var provider = await _runtime.Dispatcher.Marshal(
+                GameSaveProvider.InitializeAsync(user, configuration.Scid, syncOnDemand: false, cancellationToken))
+                .ConfigureAwait(false);
 
-            _boundUser = user;
-            provider = _provider;
+            if (!TryPublishProvider(provider, user))
+            {
+                provider.Dispose();
+                return null;
+            }
 
             CrashLog.MarkOnce(
                 "gamesave-provider",
                 $"gamesave: connected storage initialized on SCID {configuration.Scid} " +
                 $"from {configuration.Source}");
 
-            return true;
+            return provider;
         }
         catch (Exception ex) when (ex is GameRuntimeException
                                       or InvalidOperationException
@@ -296,25 +297,51 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
                 "gamesave-provider",
                 $"gamesave: connected storage is unavailable - {ex.Message}");
 
-            return false;
+            return null;
+        }
+        finally
+        {
+            _providerGate.Release();
+        }
+    }
+
+    private bool TryPublishProvider(GameSaveProvider provider, User user)
+    {
+        lock (_stateLock)
+        {
+            if (_disposed)
+            {
+                return false;
+            }
+
+            _provider = provider;
+            _boundUser = user;
+            return true;
         }
     }
 
     private void ReleaseProvider()
     {
-        _provider?.Dispose();
-        _provider = null;
-        _boundUser = null;
+        lock (_stateLock)
+        {
+            _provider?.Dispose();
+            _provider = null;
+            _boundUser = null;
+        }
     }
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_stateLock)
         {
-            return;
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
         }
 
-        _disposed = true;
         ReleaseProvider();
     }
 }
