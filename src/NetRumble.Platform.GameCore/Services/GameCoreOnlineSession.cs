@@ -119,15 +119,10 @@ internal sealed class GameCoreOnlineSession : IDisposable
     /// </remarks>
     internal PlatformStatus LastSignInStatus => _lastSignInStatus;
 
-    /// <summary>
-    /// True when the last sign-in failure was a network condition that may since have
-    /// cleared, so a user-initiated online action may retry it.
-    /// </summary>
     internal bool CanRetrySignIn => _lastSignInStatus
-        is PlatformStatus.Ok
-        or PlatformStatus.TimedOut
-        or PlatformStatus.NetworkFailure
-        or PlatformStatus.Canceled;
+        is not PlatformStatus.NotSignedIn
+        and not PlatformStatus.NoPrivilege
+        and not PlatformStatus.Unavailable;
 
     /// <summary>
     /// Logs the current Xbox user in to PlayFab and replaces the previous PlayFab state.
@@ -252,11 +247,7 @@ internal sealed class GameCoreOnlineSession : IDisposable
                                       or InvalidOperationException)
         {
             Clear();
-            return RememberFailure(
-                PlatformResult<PlayFabSession>.Fail(
-                    PlatformStatus.Failed,
-                    $"PlayFab sign-in failed while {stage}.",
-                    ex.Message));
+            return RememberFailure(ClassifyFailure(ex, stage));
         }
     }
 
@@ -267,6 +258,24 @@ internal sealed class GameCoreOnlineSession : IDisposable
         _lastSignInFailure = string.Empty;
         _lastSignInDiagnostics = null;
         _lastSignInStatus = PlatformStatus.Ok;
+    }
+
+    private static PlatformResult<PlayFabSession> ClassifyFailure(Exception ex, string stage)
+    {
+        return ex switch
+        {
+            UserException { HResultCode: HResult.EGameUserSignedOut or HResult.EGameUserNoAuthUser
+                or HResult.EGameUserUserNotFound } => PlatformResult<PlayFabSession>.Fail(
+                    PlatformStatus.NotSignedIn, "The Xbox account is no longer signed in.", ex.Message),
+            PlayFabException { HResultCode: PlayFabErrors.AccountBanned or PlayFabErrors.AccountNotFound }
+                => PlatformResult<PlayFabSession>.Fail(
+                    PlatformStatus.NoPrivilege, $"PlayFab refused this account while {stage}.", ex.Message),
+            PlayFabException { HResultCode: PlayFabErrors.InvalidTitleId or PlayFabErrors.TitleNotActivated }
+                => PlatformResult<PlayFabSession>.Fail(
+                    PlatformStatus.Unavailable, $"The PlayFab title is not usable ({stage}).", ex.Message),
+            _ => PlatformResult<PlayFabSession>.Fail(
+                PlatformStatus.Failed, $"PlayFab sign-in failed while {stage}.", ex.Message),
+        };
     }
 
     private PlatformResult<PlayFabSession> RememberFailure(PlatformResult<PlayFabSession> result)
