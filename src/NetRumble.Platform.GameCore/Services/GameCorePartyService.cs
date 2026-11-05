@@ -1,5 +1,6 @@
 using NetRumble.Platform.Networking;
 using System.Buffers.Binary;
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using GDK.Net;
@@ -49,6 +50,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
     /// </summary>
     private const string HostTokenLobbyDataKey = "netrumble.party.hostToken";
     private static readonly byte[] ControlMagic = Encoding.ASCII.GetBytes("NRP1");
+    private static readonly TimeSpan LeaveTeardownBudget = TimeSpan.FromSeconds(6);
 
     /// <summary>Client to host: "I have an endpoint, assign me a peer id".</summary>
     private const byte ControlKindHello = 1;
@@ -79,8 +81,10 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
     /// from in the first place.
     /// </summary>
     private readonly GameCoreModerationService? _moderation;
-    private readonly Dictionary<PartyOperationId, PendingOperation> _pendingOperations = [];
-    private readonly List<PendingRegions> _pendingRegions = [];
+    private Dictionary<PartyOperationId, PendingOperation> _pendingOperations = [];
+    private List<PendingRegions> _pendingRegions = [];
+    private readonly ConcurrentQueue<Action> _resetCancellations = new();
+    private readonly object _waitGate = new();
     private readonly Dictionary<ushort, int> _endpointToPeer = [];
     private readonly Dictionary<int, PartyEndpoint> _peerToEndpoint = [];
     private readonly Dictionary<string, int> _entityToPeer = new(StringComparer.Ordinal);
@@ -495,6 +499,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             }
         }
 
+        using var teardownBudget = new CancellationTokenSource(LeaveTeardownBudget);
         _leaving = true;
         try
         {
@@ -502,30 +507,30 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             {
                 if (_localChat is not null)
                 {
-                    await TryAwait(_network.DisconnectChatControl(_localChat)).ConfigureAwait(false);
+                    await TryAwait(_network.DisconnectChatControl(_localChat), teardownBudget.Token).ConfigureAwait(false);
                 }
 
                 if (_localEndpoint is not null)
                 {
-                    await TryAwait(_network.DestroyEndpoint(_localEndpoint)).ConfigureAwait(false);
+                    await TryAwait(_network.DestroyEndpoint(_localEndpoint), teardownBudget.Token).ConfigureAwait(false);
                 }
 
                 if (_partyUser is not null)
                 {
-                    await TryAwait(_network.RemoveLocalUser(_partyUser)).ConfigureAwait(false);
+                    await TryAwait(_network.RemoveLocalUser(_partyUser), teardownBudget.Token).ConfigureAwait(false);
                 }
 
-                await TryAwait(_network.Leave()).ConfigureAwait(false);
+                await TryAwait(_network.Leave(), teardownBudget.Token).ConfigureAwait(false);
             }
 
             if (_party is not null && _localChat is not null)
             {
-                await TryAwait(_party.LocalDevice.DestroyChatControl(_localChat)).ConfigureAwait(false);
+                await TryAwait(_party.LocalDevice.DestroyChatControl(_localChat), teardownBudget.Token).ConfigureAwait(false);
             }
 
             if (_party is not null && _partyUser is not null)
             {
-                await TryAwait(_party.DestroyLocalUser(_partyUser)).ConfigureAwait(false);
+                await TryAwait(_party.DestroyLocalUser(_partyUser), teardownBudget.Token).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (IsPlatformException(ex))
@@ -534,6 +539,11 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
         finally
         {
+            if (teardownBudget.IsCancellationRequested)
+            {
+                CrashLog.MarkOnce("party-leave-budget", "party: leave teardown stopped waiting after its budget.");
+            }
+
             if (_online is not null && _lobbyId.Length > 0)
             {
                 // #25: a host that merely leaves its own lobby leaves the row behind,
@@ -784,7 +794,10 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 return connected;
             }
 
-            _peerAssignment = new TaskCompletionSource<int>();
+            lock (_waitGate)
+            {
+                _peerAssignment = new TaskCompletionSource<int>();
+            }
             SendControlHello();
             var assigned = await AwaitPeerAssignmentAsync(cancellationToken).ConfigureAwait(false);
             if (assigned <= IPartyService.HostPeerId)
@@ -997,7 +1010,10 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
 
         var pending = new PendingRegions(cancellationToken);
-        _pendingRegions.Add(pending);
+        lock (_waitGate)
+        {
+            _pendingRegions.Add(pending);
+        }
         return pending.Completion.Task;
     }
 
@@ -1005,7 +1021,10 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         where T : PartyOperationCompleted
     {
         var pending = new PendingOperation(typeof(T), cancellationToken);
-        _pendingOperations[operation] = pending;
+        lock (_waitGate)
+        {
+            _pendingOperations[operation] = pending;
+        }
         return pending.Completion.Task.ContinueWith(
             task => (T)task.Result,
             CancellationToken.None,
@@ -1020,8 +1039,12 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             return Task.FromResult(LocalPeerId);
         }
 
-        var assignment = _peerAssignment ??= new TaskCompletionSource<int>();
-        _peerAssignmentCancellation = cancellationToken;
+        TaskCompletionSource<int> assignment;
+        lock (_waitGate)
+        {
+            assignment = _peerAssignment ??= new TaskCompletionSource<int>();
+            _peerAssignmentCancellation = cancellationToken;
+        }
         return assignment.Task;
     }
 
@@ -1060,6 +1083,12 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     private void CompleteCanceledOperations()
     {
+        var budget = _resetCancellations.Count;
+        while (budget-- > 0 && _resetCancellations.TryDequeue(out var cancel))
+        {
+            cancel();
+        }
+
         foreach (var pair in _pendingOperations.ToArray())
         {
             if (pair.Value.CancellationToken.IsCancellationRequested && _pendingOperations.Remove(pair.Key))
@@ -1708,6 +1737,36 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     private void ResetSessionState()
     {
+        Dictionary<PartyOperationId, PendingOperation> operations;
+        List<PendingRegions> regions;
+        TaskCompletionSource<int>? assignment;
+        CancellationToken assignmentCancellation;
+        lock (_waitGate)
+        {
+            operations = _pendingOperations;
+            _pendingOperations = [];
+            regions = _pendingRegions;
+            _pendingRegions = [];
+            assignment = _peerAssignment;
+            _peerAssignment = null;
+            assignmentCancellation = _peerAssignmentCancellation;
+            _peerAssignmentCancellation = default;
+        }
+        _resetCancellations.Enqueue(() =>
+        {
+            foreach (var pending in operations.Values)
+            {
+                pending.Completion.TrySetCanceled(pending.CancellationToken);
+            }
+
+            foreach (var pending in regions)
+            {
+                pending.Completion.TrySetCanceled(pending.CancellationToken);
+            }
+
+            assignment?.TrySetCanceled(assignmentCancellation);
+        });
+
         HasNetwork = false;
         IsHost = false;
         LocalPeerId = 0;
@@ -1721,11 +1780,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         _localEndpoint = null;
         _localChat = null;
         _partyUser = null;
-        _peerAssignment = null;
-        _peerAssignmentCancellation = default;
         _leaving = false;
-        _pendingOperations.Clear();
-        _pendingRegions.Clear();
         _endpointToPeer.Clear();
         _peerToEndpoint.Clear();
         _entityToPeer.Clear();
