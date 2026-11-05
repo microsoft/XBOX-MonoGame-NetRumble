@@ -1065,6 +1065,11 @@ public sealed class LobbyScreen : Screen
         {
             result = PlatformResult.Canceled();
         }
+        catch (Exception ex)
+        {
+            CrashLog.Mark($"lobby: join attempt failed ({ex.GetType().Name}).");
+            result = PlatformResult.Fail(PlatformStatus.Failed, "Could not join the match.");
+        }
 
         if (_transitioning)
         {
