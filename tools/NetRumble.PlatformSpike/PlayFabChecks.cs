@@ -6,6 +6,7 @@ using NetRumble.Platform.Networking;
 using NetRumble.Platform.Offline;
 using NetRumble.Platform.PlayFab;
 using GDK.Net.PlayFab.Multiplayer;
+using GDK.Net.PlayFab.Party;
 using NetRumble.Platform.GameCore;
 using NetRumble.Platform.GameCore.Interop;
 using NetRumble.Platform.GameCore.Services;
@@ -60,6 +61,8 @@ internal static class PlayFabChecks
 
         await AccountSwitchFailureCheck(config, Check);
         TokenRefreshFailureChecks(config, Check);
+        await ProviderShutdownChecks(config, Check);
+        LobbyDisconnectChecks(config, Check);
 
         Check("adult account creation remains allowed", PlatformAgeGroup.Adult.AllowsSilentAccountCreation());
         Check("child account creation remains forbidden", !PlatformAgeGroup.Child.AllowsSilentAccountCreation());
@@ -274,6 +277,143 @@ internal static class PlayFabChecks
             (DateTimeOffset)refreshAt.GetValue(lobbies)! == DateTimeOffset.MaxValue);
     }
 
+    private static async Task ProviderShutdownChecks(
+        PlayFabConfiguration config, Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        foreach (var holdSignIn in new[] { true, false })
+        {
+            var provider = new GameCorePlatformProvider(playFab: config);
+            var online = (GameCoreOnlineSession)typeof(GameCorePlatformProvider)
+                .GetField("_online", Flags)!.GetValue(provider)!;
+            var services = (PlayFabOnlineServices)typeof(GameCoreOnlineSession)
+                .GetField("_services", Flags)!.GetValue(online)!;
+            var gate = (SemaphoreSlim)typeof(PlayFabOnlineServices)
+                .GetField("_signInGate", Flags)!.GetValue(services)!;
+            var idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            if (holdSignIn)
+            {
+                await gate.WaitAsync();
+            }
+            else
+            {
+                typeof(PlayFabOnlineServices).GetField("_idle", Flags)!.SetValue(services, idle);
+            }
+            try
+            {
+                var shutdown = provider.DisposeAsync().AsTask();
+                check($"provider shutdown waits for outstanding {(holdSignIn ? "sign-ins" : "entity leases")}",
+                    !shutdown.IsCompleted);
+                if (holdSignIn)
+                {
+                    gate.Release();
+                }
+                else
+                {
+                    idle.SetResult();
+                }
+                await shutdown.WaitAsync(TimeSpan.FromSeconds(5));
+                check("provider shutdown completes after native work drains", shutdown.IsCompletedSuccessfully);
+            }
+            finally
+            {
+                if (holdSignIn && gate.CurrentCount == 0)
+                {
+                    gate.Release();
+                }
+                idle.TrySetResult();
+                await provider.DisposeAsync();
+            }
+        }
+    }
+
+    private static void LobbyDisconnectChecks(
+        PlayFabConfiguration config, Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        foreach (var hr in new[] { PlayFabErrors.Noentitytoken, PlayFabErrors.CoreLocalUserNotLoggedIn, 0 })
+        {
+            var runtime = new GameCoreRuntime();
+            using var online = new GameCoreOnlineSession(runtime, config);
+            var identity = new GameCoreIdentityService(runtime, online);
+            var services = (PlayFabOnlineServices)typeof(GameCoreOnlineSession)
+                .GetField("_services", Flags)!.GetValue(online)!;
+            typeof(PlayFabOnlineServices).GetField("_session", Flags)!.SetValue(services, new PlayFabSession
+            {
+                EntityId = "expired-account",
+                EntityType = "title_player_account",
+                PlayFabId = "expired-player",
+            });
+            using var party = new GameCorePartyService(runtime, identity, online, config, null!);
+            typeof(GameCorePartyService).GetProperty(nameof(party.HasNetwork))!.SetValue(party, true);
+            typeof(GameCorePartyService).GetProperty(nameof(party.IsHost))!.SetValue(party, true);
+            typeof(GameCorePartyService).GetProperty(nameof(party.ConnectionString))!.SetValue(party, "old-invite");
+            typeof(GameCorePartyService).GetProperty(nameof(party.JoinCode))!.SetValue(party, "ABCDE");
+            var assignment = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+            typeof(GameCorePartyService).GetField("_peerAssignment", Flags)!.SetValue(party, assignment);
+            var operation = (Task)typeof(GameCorePartyService).GetMethod("AwaitOperationAsync", Flags)!
+                .MakeGenericMethod(typeof(PartyOperationCompleted))
+                .Invoke(party, [default(PartyOperationId), CancellationToken.None])!;
+            var invalidIdentity = hr != 0;
+            var events = 0;
+            var clearedBeforeNotification = false;
+            party.NetworkDestroyed += failure =>
+            {
+                events++;
+                clearedBeforeNotification = !party.HasNetwork && !party.IsHost
+                    && party.ConnectionString.Length == 0 && party.JoinCode.Length == 0
+                    && online.IsSignedIn != invalidIdentity;
+            };
+            if (invalidIdentity)
+            {
+                typeof(PlayFabLobbyClient).GetMethod("TokenRefreshFailed", Flags)!
+                    .Invoke(online.Lobbies, [new PlayFabException(hr)]);
+            }
+            else
+            {
+                var connectionLost = (Action<PlatformResult>)typeof(PlayFabLobbyClient)
+                    .GetField("ConnectionLost", Flags)!.GetValue(online.Lobbies)!;
+                connectionLost(PlatformResult.Fail(PlatformStatus.NetworkFailure, "The match directory connection was lost."));
+            }
+            var label = invalidIdentity ? $"terminal identity failure 0x{hr:X8}" : "native Lobby disconnect";
+            check($"{label} clears Party before reporting loss",
+                events == 1 && clearedBeforeNotification);
+            check($"{label} cancels pending peer assignment", assignment.Task.IsCanceled);
+            check($"{label} cancels pending Party operations without wrapping cancellation", operation.IsCanceled);
+            check($"{label} retains a recoverable identity state",
+                online.IsSignedIn != invalidIdentity && online.CanRetrySignIn);
+        }
+    }
+
+    private static void NativeLobbyResetChecks(Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var lobbies = new PlayFabLobbyClient(new PlayFabConfiguration { TitleId = "A1B2C" }, () => null);
+        var managerField = typeof(PlayFabLobbyClient).GetField("_multiplayer", Flags)!;
+        managerField.SetValue(lobbies, PlayFabMultiplayer.Initialize("A1B2C"));
+        var pending = (System.Collections.IDictionary)typeof(PlayFabLobbyClient)
+            .GetField("_pending", Flags)!.GetValue(lobbies)!;
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        typeof(PlayFabLobbyClient).GetMethod("Register", Flags)!.MakeGenericMethod(typeof(bool))
+            .Invoke(lobbies, [OperationId.None, CancellationToken.None, completion,
+                new Func<LobbyOperationCompleted, bool>(_ => true)]);
+        lobbies.Reset();
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        lobbies.Pump();
+        elapsed.Stop();
+        check("account-change pump does not run the one-second shutdown drain",
+            elapsed.Elapsed < TimeSpan.FromMilliseconds(500));
+        check("account-change reset cancels outstanding callers", completion.Task.IsCanceled);
+        check("account-change reset preserves native completions for subsequent ticks", pending.Count == 1);
+        lobbies.Pump();
+        check("retirement continues across pump ticks", pending.Count == 1);
+        var deadline = typeof(PlayFabLobbyClient).GetField("_resetDeadline", Flags)!;
+        deadline.SetValue(lobbies, Environment.TickCount64 - 1);
+        lobbies.Pump();
+        check("retirement timeout releases the old manager and operation registry",
+            managerField.GetValue(lobbies) is null && pending.Count == 0);
+    }
+
     internal static int NativeSmoke()
     {
         Console.WriteLine("PlayFab native startup smoke (no authentication or service writes)");
@@ -299,7 +439,16 @@ internal static class PlayFabChecks
                 Console.WriteLine("    PASS Gaming Runtime, PlayFab Core/Services, service config and Lobby manager initialization/pump");
             }
             Console.WriteLine("    PASS Lobby manager disposal");
-            return 0;
+            var failures = 0;
+            NativeLobbyResetChecks((label, passed) =>
+            {
+                Console.WriteLine($"    {(passed ? "PASS" : "FAIL")} {label}");
+                if (!passed)
+                {
+                    failures++;
+                }
+            });
+            return failures == 0 ? 0 : 1;
         }
         catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
         {

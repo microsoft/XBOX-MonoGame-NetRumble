@@ -63,6 +63,8 @@ The service owns the native entity; cloud operations borrow duplicate handles so
 out cannot dispose the identity underneath an in-flight call. Shutdown cancels work and
 drains borrowers before the Gaming Runtime is released. Xbox replacement login first
 clears the previous identity and invalidates older sign-ins, even if the new login fails.
+Provider shutdown awaits native sign-ins and entity borrowers independently of the
+budget for pump-driven Party and Xbox Services teardown.
 
 Lobby uses connected native lobbies with owner migration disabled. Operations and result
 snapshots run on the frame pump; canceled create/join completions leave their lobbies
@@ -71,6 +73,11 @@ supplied to the Multiplayer manager. Hosts close discovery and membership before
 instead of calling the server-only delete API. Retryable token-refresh failures are logged
 and retried after ten seconds without disconnecting the match. Terminal refresh failures
 stop retries and report connection loss; native Lobby disconnections still report loss.
+Account changes retire Lobby operations across subsequent frame pumps, with a one-second
+cleanup deadline, rather than blocking a frame. New requests wait until the old manager
+is released. Only final shutdown actively drains completions while waiting. Lobby loss
+disposes Party and clears pending session work before notifying the game; expired
+sign-in also clears the shared PlayFab identity so another Host or Join can authenticate.
 
 The user-data payload format is unchanged: Base64 under the existing keys, with a
 750-byte limit. XGameSave remains the default console cloud tier.

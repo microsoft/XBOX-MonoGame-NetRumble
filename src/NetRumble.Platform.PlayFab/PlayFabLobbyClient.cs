@@ -40,6 +40,8 @@ internal sealed class PlayFabLobbyClient : IDisposable
     private volatile bool _disposed;
     private bool _refreshingToken;
     private DateTimeOffset _refreshTokenAt = DateTimeOffset.MaxValue;
+    private bool _resetting;
+    private long _resetDeadline;
 
     internal PlayFabLobbyClient(PlayFabConfiguration configuration,
         Func<PlayFabEntityLease?> acquireEntity, CancellationToken shutdown = default)
@@ -245,7 +247,7 @@ internal sealed class PlayFabLobbyClient : IDisposable
                 throw new InvalidOperationException("PlayFab returned no entity token.");
             }
             var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _commands.Enqueue(() =>
+            void Start()
             {
                 try
                 {
@@ -255,6 +257,11 @@ internal sealed class PlayFabLobbyClient : IDisposable
                         return;
                     }
                     operationToken.ThrowIfCancellationRequested();
+                    if (_resetting)
+                    {
+                        _commands.Enqueue(Start);
+                        return;
+                    }
                     _multiplayer ??= PlayFabMultiplayer.Initialize(_configuration.TitleId);
                     _multiplayer.SetEntityToken(key, token.Token);
                     _refreshTokenAt = RefreshAt(token, DateTimeOffset.UtcNow);
@@ -264,7 +271,8 @@ internal sealed class PlayFabLobbyClient : IDisposable
                 {
                     completion.TrySetException(ex);
                 }
-            });
+            }
+            _commands.Enqueue(Start);
             return PlatformResult<T>.Ok(await completion.Task.WaitAsync(operationToken).ConfigureAwait(false));
         }
         catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
@@ -331,6 +339,28 @@ internal sealed class PlayFabLobbyClient : IDisposable
         }
         if (_multiplayer is null)
         {
+            if (_resetting)
+            {
+                CompleteReset();
+            }
+            return;
+        }
+        if (_resetting)
+        {
+            try
+            {
+                ProcessChanges();
+            }
+            catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
+            {
+                CrashLog.Mark($"playfab: lobby retirement pump failed: {ex.Message}");
+                CompleteReset();
+                return;
+            }
+            if ((_pending.Count == 0 && _retiring.Count == 0) || Environment.TickCount64 >= _resetDeadline)
+            {
+                CompleteReset();
+            }
             return;
         }
         ProcessChanges();
@@ -474,11 +504,19 @@ internal sealed class PlayFabLobbyClient : IDisposable
     internal void Reset()
     {
         Interlocked.Increment(ref _revision);
-        _commands.Enqueue(Release);
+        _commands.Enqueue(BeginReset);
     }
 
-    private void Release()
+    private void BeginReset()
     {
+        if (_resetting)
+        {
+            return;
+        }
+        _resetting = true;
+        _resetDeadline = Environment.TickCount64 + 1000;
+        _refreshTokenAt = DateTimeOffset.MaxValue;
+        _refreshingToken = false;
         foreach (var pending in _pending.Values)
         {
             pending.Cancel();
@@ -493,33 +531,19 @@ internal sealed class PlayFabLobbyClient : IDisposable
                 }
                 catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
                 {
-                    CrashLog.Mark($"playfab: lobby could not be left during shutdown: {ex.Message}");
+                    CrashLog.Mark($"playfab: lobby could not be retired: {ex.Message}");
                 }
             }
         }
         _lobbies.Clear();
         _hosted.Clear();
-        var deadline = Environment.TickCount64 + 1000;
-        while (_multiplayer is not null && (_pending.Count > 0 || _retiring.Count > 0)
-            && Environment.TickCount64 < deadline)
-        {
-            try
-            {
-                ProcessChanges();
-            }
-            catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
-            {
-                CrashLog.Mark($"playfab: lobby shutdown pump failed: {ex.Message}");
-                break;
-            }
-            if (_pending.Count > 0 || _retiring.Count > 0)
-            {
-                Thread.Sleep(1);
-            }
-        }
+    }
+
+    private void CompleteReset()
+    {
         if (_pending.Count > 0 || _retiring.Count > 0)
         {
-            CrashLog.Mark("playfab: timed out draining lobby operations before shutdown.");
+            CrashLog.Mark("playfab: cleanup ended before all lobby operations drained.");
         }
         _pending.Clear();
         _retiring.Clear();
@@ -528,6 +552,7 @@ internal sealed class PlayFabLobbyClient : IDisposable
         _multiplayer = null;
         _refreshTokenAt = DateTimeOffset.MaxValue;
         _refreshingToken = false;
+        _resetting = false;
     }
 
     private void RetireLobby(Lobby lobby, bool close)
@@ -555,9 +580,32 @@ internal sealed class PlayFabLobbyClient : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
         _disposed = true;
+        Interlocked.Increment(ref _revision);
         Pump();
-        Release();
+        BeginReset();
+        while (_multiplayer is not null && (_pending.Count > 0 || _retiring.Count > 0)
+            && Environment.TickCount64 < _resetDeadline)
+        {
+            try
+            {
+                ProcessChanges();
+            }
+            catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
+            {
+                CrashLog.Mark($"playfab: lobby shutdown pump failed: {ex.Message}");
+                break;
+            }
+            if (_pending.Count > 0 || _retiring.Count > 0)
+            {
+                Thread.Sleep(1);
+            }
+        }
+        CompleteReset();
     }
 
     private sealed record PendingOperation(

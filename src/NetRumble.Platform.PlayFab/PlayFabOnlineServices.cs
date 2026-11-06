@@ -28,6 +28,13 @@ public sealed class PlayFabOnlineServices : IDisposable
         Configuration = configuration;
         GameSaves = new PlayFabGameSaveService(configuration, AcquireEntity, _shutdown.Token, localSaveRoot, () => EntityId);
         Lobbies = new PlayFabLobbyClient(configuration, AcquireEntity, _shutdown.Token);
+        Lobbies.ConnectionLost += failure =>
+        {
+            if (failure.Status == PlatformStatus.NotSignedIn)
+            {
+                SignOut();
+            }
+        };
     }
 
     public PlayFabConfiguration Configuration { get; }

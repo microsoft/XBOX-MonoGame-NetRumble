@@ -211,7 +211,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     /// Gaming Runtime is still initialized, and only then shut the runtime down.
     /// </para>
     /// <para>
-    /// <b>One budget across the whole teardown, not one per stage.</b> Both drains used to
+    /// <b>One budget across the pump-driven stages, not one per stage.</b> Both drains used to
     /// arm their own five seconds, so an exit that had to wait for both waited ten, on top
     /// of the cloud-save flush the game runs before calling this - thirteen seconds with
     /// the audio already stopped and the window still up. The reasoning that justified it
@@ -220,6 +220,11 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     /// joins the deadline already running instead of pushing it back. Nothing else
     /// changes - both stages are still waited on, and one that never lands still gives
     /// way rather than turning an exit into a hang.
+    /// </para>
+    /// <para>
+    /// PlayFab sign-ins and borrowed entity handles do not need dispatcher pumping.
+    /// Their shutdown is awaited without the pump budget so the Gaming Runtime cannot
+    /// be released while those native calls are still using it.
     /// </para>
     /// </remarks>
     public async ValueTask DisposeAsync()
@@ -234,7 +239,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         // user that sign-out has already released.
         _saves.Dispose();
 #endif
-        _runtime.PumpUntil(_online.ShutdownAsync(), RemainingUntil(deadline));
+        await _online.ShutdownAsync().ConfigureAwait(false);
         await _runtime.ShutdownAsync().ConfigureAwait(false);
         await _fallback.DisposeAsync().ConfigureAwait(false);
     }

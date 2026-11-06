@@ -158,13 +158,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         _moderation = moderation;
         if (_online is not null)
         {
-            _online.Lobbies.ConnectionLost += failure =>
-            {
-                if (HasNetwork && !_leaving)
-                {
-                    NetworkDestroyed?.Invoke(failure);
-                }
-            };
+            _online.Lobbies.ConnectionLost += OnLobbyConnectionLost;
         }
     }
 
@@ -760,6 +754,10 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
 
         _disposed = true;
+        if (_online is not null)
+        {
+            _online.Lobbies.ConnectionLost -= OnLobbyConnectionLost;
+        }
         DisposeParty();
         ResetSessionState();
     }
@@ -1022,16 +1020,12 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         return pending.Completion.Task;
     }
 
-    private Task<T> AwaitOperationAsync<T>(PartyOperationId operation, CancellationToken cancellationToken)
+    private async Task<T> AwaitOperationAsync<T>(PartyOperationId operation, CancellationToken cancellationToken)
         where T : PartyOperationCompleted
     {
         var pending = new PendingOperation(typeof(T), cancellationToken);
         _pendingOperations[operation] = pending;
-        return pending.Completion.Task.ContinueWith(
-            task => (T)task.Result,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        return (T)await pending.Completion.Task.ConfigureAwait(false);
     }
 
     private Task<int> AwaitPeerAssignmentAsync(CancellationToken cancellationToken)
@@ -1709,6 +1703,24 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
     private static int? ReadPeerId(byte[] data)
         => data.Length >= 4 ? BinaryPrimitives.ReadInt32LittleEndian(data) : null;
 
+    private void OnLobbyConnectionLost(PlatformResult failure)
+    {
+        if (_disposed || _leaving || (!HasNetwork && _party is null))
+        {
+            return;
+        }
+
+        var peers = _peerToEndpoint.Keys.Where(id => id != LocalPeerId).ToArray();
+        _online?.Lobbies.Reset();
+        DisposeParty();
+        ResetSessionState();
+        foreach (var peerId in peers)
+        {
+            PeerLeft?.Invoke(peerId);
+        }
+        NetworkDestroyed?.Invoke(failure);
+    }
+
     private void OnNetworkDestroyed(PartyNetworkDestroyed destroyed)
     {
         if (_leaving)
@@ -1729,6 +1741,9 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     private void ResetSessionState()
     {
+        var assignment = _peerAssignment;
+        var operations = _pendingOperations.Values.ToArray();
+        var regions = _pendingRegions.ToArray();
         HasNetwork = false;
         IsHost = false;
         LocalPeerId = 0;
@@ -1752,6 +1767,15 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         _entityToPeer.Clear();
         _mutedPeers.Clear();
         _restrictions.Clear();
+        assignment?.TrySetCanceled();
+        foreach (var pending in operations)
+        {
+            pending.Completion.TrySetCanceled();
+        }
+        foreach (var pending in regions)
+        {
+            pending.Completion.TrySetCanceled();
+        }
     }
 
     private void DisposeParty()
@@ -1762,6 +1786,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
         catch (Exception ex) when (IsPlatformException(ex))
         {
+            CrashLog.Mark($"party: manager teardown failed: {ex.Message}");
         }
 
         _party = null;
