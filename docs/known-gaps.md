@@ -106,8 +106,9 @@ usually because it needs a signed-in account, XBOX Series X|S hardware or a seco
   save provider. An absent-blob first run has only ever been reasoned about, and roaming
   needs a second device. The PlayFab tier has been proven against a fake cloud tier only.
 - **Behaviour under real network conditions.** Join and invite flows are confirmed between
-  two XBOX Series X|S consoles, which exercises the REST and lobby layers rather than the
-  gameplay transport. The three reliability tiers have only ever run on one machine over
+  two XBOX Series X|S consoles before the native PlayFab migration. Native authentication,
+  user-data roaming, connected lobby creation/join, token renewal and host cleanup need
+  another authenticated two-device pass. The three reliability tiers have only ever run on one machine over
   loopback and a local adapter, which exercises no latency, no jitter and no genuine packet
   loss.
 - **XBOX Series X|S output at runtime.** That flavour compiles and links. Whether the title

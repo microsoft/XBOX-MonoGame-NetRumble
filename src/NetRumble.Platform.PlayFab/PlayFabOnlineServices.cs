@@ -1,158 +1,284 @@
+using GDK.Net.PlayFab;
+using GDK.Net.Users;
+using NetRumble.Platform.Diagnostics;
+
 namespace NetRumble.Platform.PlayFab;
 
-/// <summary>
-/// Owns the PlayFab session and hands out the services that depend on it.
-/// </summary>
+/// <summary>Owns the native PlayFab identity, lobby client and user-data services.</summary>
 /// <remarks>
-/// <para>
-/// The composition root for this project, and the only public type in it. Everything
-/// else is internal, because a provider should be able to adopt PlayFab by holding one
-/// object and forwarding three properties - not by learning the REST client, the
-/// session record and the auth client.
-/// </para>
-/// <para>
-/// Sign-in state lives here rather than in each service so that one login serves all
-/// of them, and a re-login is picked up everywhere at once. The services read
-/// <see cref="Session"/> through a callback for exactly that reason.
-/// </para>
-/// <para>
-/// <b>Threading.</b> <see cref="Session"/> is written on whichever thread completes a
-/// sign-in and read by every service call, so it is guarded by a volatile reference
-/// swap - the record is immutable, so a reader either sees the whole old session or
-/// the whole new one, never a mixture. This type does <i>not</i> impose the
-/// <c>IPlatformRuntime.Pump()</c> threading contract; a provider that adopts it is
-/// responsible for marshalling results onto the pump thread, the same as it already
-/// does for its own async work.
-/// </para>
+/// Pump and dispose on the provider's pump thread. Await <see cref="ShutdownAsync"/>
+/// before releasing the Gaming Runtime.
 /// </remarks>
 public sealed class PlayFabOnlineServices : IDisposable
 {
-    private readonly PlayFabRestClient _client;
-    private readonly PlayFabAuthClient _auth;
-
+    private readonly object _gate = new();
+    private readonly SemaphoreSlim _signInGate = new(1, 1);
+    private readonly CancellationTokenSource _shutdown = new();
+    private readonly HashSet<PlayFabEntityLease> _leases = [];
+    private TaskCompletionSource _idle = CompletedSource();
+    private PlayFabServiceConfig? _serviceConfig;
+    private PlayFabLocalUser? _localUser;
+    private PlayFabEntity? _entity;
     private PlayFabSession? _session;
+    private long _generation;
+    private bool _disposed;
 
-    /// <summary>
-    /// Creates the service set for <paramref name="configuration"/>.
-    /// </summary>
-    /// <param name="handler">
-    /// Transport override for tests. Null uses a real HTTPS handler; an injected one is
-    /// not disposed by this object.
-    /// </param>
-    /// <param name="localSaveRoot">
-    /// Overrides where the local save tier writes. Null uses the default under
-    /// <c>%LOCALAPPDATA%</c>.
-    /// </param>
-    public PlayFabOnlineServices(
-        PlayFabConfiguration configuration,
-        HttpMessageHandler? handler = null,
-        string? localSaveRoot = null)
+    public PlayFabOnlineServices(PlayFabConfiguration configuration, string? localSaveRoot = null)
     {
         Configuration = configuration;
-
-        _client = new PlayFabRestClient(configuration, handler);
-        _auth = new PlayFabAuthClient(_client);
-
-        // Scoped by EntityId (XR-052): the local tier must never mix one signed-in
-        // account's settings, stats or history into another's on a shared device.
-        GameSaves = new PlayFabGameSaveService(_client, () => Session, localSaveRoot, () => Session?.EntityId);
-        Lobbies = new PlayFabLobbyClient(_client, () => Session);
+        GameSaves = new PlayFabGameSaveService(configuration, AcquireEntity, _shutdown.Token, localSaveRoot, () => EntityId);
+        Lobbies = new PlayFabLobbyClient(configuration, AcquireEntity, _shutdown.Token);
+        Lobbies.ConnectionLost += failure =>
+        {
+            if (failure.Status == PlatformStatus.NotSignedIn)
+            {
+                SignOut();
+            }
+        };
     }
 
-    /// <summary>The title these services talk to.</summary>
     public PlayFabConfiguration Configuration { get; }
-
-    /// <summary>The current session, or null when not signed in.</summary>
-    public PlayFabSession? Session
-    {
-        get => Volatile.Read(ref _session);
-        private set => Volatile.Write(ref _session, value);
-    }
-
-    /// <summary>True when a session exists and its entity token is still usable.</summary>
-    public bool IsSignedIn => Session?.IsEntityTokenValid(DateTimeOffset.UtcNow) == true;
-
-    /// <summary>
-    /// The PlayFab entity id for the signed-in player, or empty.
-    /// </summary>
-    /// <remarks>
-    /// This is what a provider copies into <see cref="PlatformUser.EntityId"/>, and the
-    /// value the whole online feature set was blocked on.
-    /// </remarks>
+    public PlayFabSession? Session => Volatile.Read(ref _session);
+    public bool IsSignedIn => Session is not null;
     public string EntityId => Session?.EntityId ?? string.Empty;
-
-    /// <summary>Local save plus a PlayFab user-data cloud tier.</summary>
     public IGameSaveService GameSaves { get; }
-
-    /// <summary>Lobby create, join and find. Used to resolve join codes.</summary>
     internal PlayFabLobbyClient Lobbies { get; }
-
-    /// <summary>
-    /// Raised whenever the session is established or cleared.
-    /// </summary>
-    /// <remarks>
-    /// A provider hooks this to update <see cref="PlatformUser.EntityId"/> and to raise
-    /// its own <c>UserChanged</c>. Without it a provider would have to poll, and an
-    /// entity id that appears half a second after sign-in "finishes" is precisely the
-    /// race that makes a match-join fail once in twenty attempts.
-    /// </remarks>
     public event Action<PlayFabSession?>? SessionChanged;
 
-    /// <summary>
-    /// Signs in with an Xbox XSTS token. The shipping path.
-    /// </summary>
-    /// <param name="xboxToken">
-    /// The GDK's <c>XBL3.0 x=&lt;hash&gt;;&lt;token&gt;</c> string, obtained from
-    /// <c>XUserGetTokenAndSignatureAsync</c> for the relying party
-    /// <c>https://playfabapi.com/</c>.
-    /// </param>
-    /// <param name="createAccount">
-    /// Whether PlayFab may provision a publisher account for this user if none exists
-    /// (XR-013). Decided by the caller from the platform age group.
-    /// </param>
-    public Task<PlatformResult<PlayFabSession>> SignInWithXboxAsync(
-        string xboxToken,
-        bool createAccount,
-        CancellationToken cancellationToken = default)
-        => AdoptAsync(_auth.LoginWithXboxAsync(xboxToken, createAccount, cancellationToken));
-
-    /// <summary>
-    /// Signs in with a developer custom id. Debug desktop builds only; see
-    /// <see cref="SignInOptions.DeveloperCustomId"/>.
-    /// </summary>
-    public Task<PlatformResult<PlayFabSession>> SignInWithCustomIdAsync(
-        string customId,
-        CancellationToken cancellationToken = default)
-        => AdoptAsync(_auth.LoginWithCustomIdAsync(customId, cancellationToken));
-
-    /// <summary>Drops the session. Does not tell PlayFab; there is nothing to tell.</summary>
-    public void SignOut()
+    internal PlayFabEntityLease? AcquireEntity()
     {
-        if (Session is null)
+        lock (_gate)
         {
-            return;
+            if (_disposed || _entity is null)
+            {
+                return null;
+            }
+            var duplicate = _entity.Duplicate();
+            if (_leases.Count == 0)
+            {
+                _idle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+            var lease = new PlayFabEntityLease(duplicate, ReleaseLease);
+            _leases.Add(lease);
+            return lease;
+        }
+    }
+
+    internal Task<PlatformResult<PlayFabSession>> SignInWithXboxUserAsync(
+        User user, bool createAccount, CancellationToken cancellationToken = default)
+        => SignInAsync(async (config, token) =>
+        {
+            var localUser = PlayFabLocalUser.CreateForXboxUser(config, user);
+            try
+            {
+                var login = await localUser.LoginAsync(createAccount, token).ConfigureAwait(false);
+                return (login, localUser);
+            }
+            catch
+            {
+                localUser.Dispose();
+                throw;
+            }
+        }, cancellationToken);
+
+    /// <summary>Developer-only native login; never creates accounts in Release builds.</summary>
+    public Task<PlatformResult<PlayFabSession>> SignInWithCustomIdAsync(
+        string customId, CancellationToken cancellationToken = default)
+    {
+#if DEBUG
+        if (string.IsNullOrWhiteSpace(customId))
+        {
+            return Task.FromResult(PlatformResult<PlayFabSession>.Fail(
+                PlatformStatus.NotSignedIn, "A developer user id is required."));
+        }
+        return SignInAsync(async (config, token) =>
+            (await Authentication.LoginWithCustomIDAsync(config,
+                new AuthenticationLoginWithCustomIDRequest { CustomId = customId, CreateAccount = true },
+                token).ConfigureAwait(false), null), cancellationToken);
+#else
+        return Task.FromResult(PlatformResult<PlayFabSession>.Unavailable(
+            "Developer PlayFab sign-in is not available in this build."));
+#endif
+    }
+
+    private async Task<PlatformResult<PlayFabSession>> SignInAsync(
+        Func<PlayFabServiceConfig, CancellationToken, Task<(PlayFabLoginResult Login, PlayFabLocalUser? User)>> login,
+        CancellationToken cancellationToken)
+    {
+        if (Configuration.IsPlaceholder)
+        {
+            return PlatformResult<PlayFabSession>.Unavailable(Configuration.UnavailableReason);
         }
 
-        Session = null;
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+        var entered = false;
+        PlayFabServiceConfig? config = null;
+        PlayFabLocalUser? localUser = null;
+        PlayFabEntity? entity = null;
+        try
+        {
+            long generation;
+            lock (_gate)
+            {
+                if (_disposed)
+                {
+                    return PlatformResult<PlayFabSession>.Unavailable("PlayFab has been shut down.");
+                }
+                generation = _generation;
+            }
+            await _signInGate.WaitAsync(lifetime.Token).ConfigureAwait(false);
+            entered = true;
+            lock (_gate)
+            {
+                if (_disposed || generation != _generation)
+                {
+                    return PlatformResult<PlayFabSession>.Canceled("The signed-in account changed.");
+                }
+            }
+            if (!PlayFabRuntime.IsInitialized)
+            {
+                PlayFabRuntime.Initialize();
+            }
+            config = new PlayFabServiceConfig(
+                $"https://{Configuration.TitleId}.playfabapi.com", Configuration.TitleId);
+            var signedIn = await login(config, lifetime.Token).ConfigureAwait(false);
+            using var result = signedIn.Login;
+            localUser = signedIn.User;
+            entity = result.Detach();
+            var key = entity.Key;
+            if (string.IsNullOrWhiteSpace(key.Id) || string.IsNullOrWhiteSpace(key.Type))
+            {
+                throw new InvalidOperationException("The native login returned an incomplete entity key.");
+            }
+            var session = new PlayFabSession
+            {
+                EntityId = key.Id,
+                EntityType = key.Type,
+                PlayFabId = result.Result.PlayFabId ?? string.Empty,
+                AccountWasCreated = result.Result.NewlyCreated,
+            };
+            lock (_gate)
+            {
+                if (_disposed || generation != _generation)
+                {
+                    return PlatformResult<PlayFabSession>.Canceled("The signed-in account changed.");
+                }
+                Lobbies.Reset();
+                ReleaseIdentity();
+                _serviceConfig = config;
+                _localUser = localUser;
+                _entity = entity;
+                Volatile.Write(ref _session, session);
+                config = null;
+                localUser = null;
+                entity = null;
+            }
+            SessionChanged?.Invoke(session);
+            return PlatformResult<PlayFabSession>.Ok(session);
+        }
+        catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
+        {
+            var failure = PlayFabFailure.FromException(ex, "PlayFab sign-in could not be completed.");
+            if (!failure.WasCanceled)
+            {
+                CrashLog.Mark($"playfab: native sign-in failed ({ex.GetType().Name}): {ex.Message}");
+            }
+            return PlayFabFailure.For<PlayFabSession>(failure);
+        }
+        finally
+        {
+            entity?.Dispose();
+            localUser?.Dispose();
+            config?.Dispose();
+            if (entered)
+            {
+                _signInGate.Release();
+            }
+        }
+    }
+
+    public void SignOut()
+    {
+        lock (_gate)
+        {
+            _generation++;
+            ReleaseIdentity();
+        }
+        Lobbies.Reset();
         SessionChanged?.Invoke(null);
     }
 
-    private async Task<PlatformResult<PlayFabSession>> AdoptAsync(
-        Task<PlatformResult<PlayFabSession>> login)
+    private void ReleaseIdentity()
     {
-        var result = await login.ConfigureAwait(false);
-
-        if (result.Failed)
-        {
-            // Leave any existing session alone. A failed refresh should not sign the
-            // player out of a session that is still working.
-            return result;
-        }
-
-        Session = result.Value;
-        SessionChanged?.Invoke(result.Value);
-        return result;
+        Volatile.Write(ref _session, null);
+        _entity?.Dispose();
+        _entity = null;
+        _localUser?.Dispose();
+        _localUser = null;
+        _serviceConfig?.Dispose();
+        _serviceConfig = null;
     }
 
-    public void Dispose() => _client.Dispose();
+    /// <summary>Drains native Lobby state changes on the platform pump thread.</summary>
+    public void Pump() => Lobbies.Pump();
+
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+            _disposed = true;
+            _generation++;
+            ReleaseIdentity();
+        }
+        _shutdown.Cancel();
+        Lobbies.Dispose();
+    }
+
+    /// <summary>Cancels work and waits for borrowed native handles before runtime shutdown.</summary>
+    public async Task ShutdownAsync()
+    {
+        Dispose();
+        await _signInGate.WaitAsync().ConfigureAwait(false);
+        _signInGate.Release();
+        Task idle;
+        lock (_gate)
+        {
+            idle = _idle.Task;
+        }
+        await idle.ConfigureAwait(false);
+    }
+
+    private void ReleaseLease(PlayFabEntityLease lease)
+    {
+        lock (_gate)
+        {
+            _leases.Remove(lease);
+            if (_leases.Count == 0)
+            {
+                _idle.TrySetResult();
+            }
+        }
+    }
+
+    private static TaskCompletionSource CompletedSource()
+    {
+        var source = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        source.SetResult();
+        return source;
+    }
+}
+
+internal sealed class PlayFabEntityLease(PlayFabEntity entity, Action<PlayFabEntityLease> release) : IDisposable
+{
+    public PlayFabEntity Entity => entity;
+
+    public void Dispose()
+    {
+        entity.Dispose();
+        release(this);
+    }
 }

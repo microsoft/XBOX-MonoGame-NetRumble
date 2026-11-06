@@ -530,7 +530,7 @@ internal sealed class GameCoreIdentityService : IIdentityService
     {
         if (_online is null
             || !_online.CanAttemptLogin
-            || _online.Entity is not null
+            || _online.IsSignedIn
             || _user is null
             || CurrentUser is null)
         {
@@ -556,7 +556,7 @@ internal sealed class GameCoreIdentityService : IIdentityService
 
         // Only on a real change: listeners treat UserChanged as a reason to rebuild, and
         // a failed retry leaves the user exactly as it was.
-        if (ReferenceEquals(_user, user) && _online.Entity is not null)
+        if (ReferenceEquals(_user, user) && _online.IsSignedIn)
         {
             UserChanged?.Invoke(CurrentUser);
         }

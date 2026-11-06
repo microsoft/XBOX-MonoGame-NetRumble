@@ -10,7 +10,7 @@ explain the decisions behind it.
 
 | Integration | Source |
 |---|---|
-| GDK sign-in and the exchange for a PlayFab identity | `src/NetRumble.Platform.GameCore/Services/GameCoreIdentityService.cs`, `src/NetRumble.Platform.PlayFab/PlayFabAuthClient.cs` |
+| GDK sign-in and the exchange for a PlayFab identity | `src/NetRumble.Platform.GameCore/Services/GameCoreIdentityService.cs`, `src/NetRumble.Platform.PlayFab/PlayFabOnlineServices.cs` |
 | Sign-in progress screen and offline fallback | `src/NetRumble.Game/UI/Screens/AcquireUserScreen.cs` |
 | PlayFab Party as the match transport | `src/NetRumble.Platform.GameCore/Services/GameCorePartyService.cs`, `src/NetRumble.Core/Net/PartyMatchNetwork.cs` |
 | Join-code discovery with PlayFab Lobby | `src/NetRumble.Platform.PlayFab/PlayFabLobbyClient.cs` |
@@ -38,7 +38,7 @@ been proven by anyone without access to that title and its sandbox.
 | Service | Offline provider | GDK provider | Proven |
 |---|---|---|---|
 | `IPlatformRuntime` | Complete | Complete. Lifecycle events bound directly because XBOX GDK.NET wraps none of them. Device kind and a connectivity hint are read from the runtime. | Connectivity hint observed answering. Lifecycle callbacks need XBOX Series X\|S hardware. |
-| `IIdentityService` | Complete | XBOX sign-in complete. Account changes surface through `AccountChanged`, controller associations through `TracksControllerAssociations`, `HasAssociatedController` and `ControllerAssociationChanged`. PlayFab entity exchange and REST session-ticket exchange are wired. | Sign-in proven. Account-change and association events need XBOX Series X\|S hardware. |
+| `IIdentityService` | Complete | XBOX sign-in complete. Account changes surface through `AccountChanged`, controller associations through `TracksControllerAssociations`, `HasAssociatedController` and `ControllerAssociationChanged`. One native PlayFab login supplies the entity for Party, Lobby and user data. | Xbox sign-in previously proven; the native PlayFab migration needs authenticated console verification. Account-change and association events need XBOX Series X\|S hardware. |
 | `IGameSaveService` | Complete, local | Connected storage (`XGameSave`) by default, PlayFab user data behind `/p:NetRumbleCloudSave=PlayFab` | Local tier proven. Neither cloud tier has been round-tripped between two devices. |
 | `IPrivilegeService` | Complete | Complete for the two privileges this title gates on, multiplayer and communications | Needs a signed-in account |
 | `IAchievementService` | Complete | Complete | No unlock round trip has been observed |

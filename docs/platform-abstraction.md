@@ -21,8 +21,8 @@ is what made that replacement invisible to the game: no file in `NetRumble.Core`
 |---|---|---|
 | `NetRumble.Platform` | Interfaces, POCOs, enums. No dependencies of its own. | No. This is the contract. |
 | `NetRumble.Platform.Offline` | A complete local and no-op implementation | No. This is always the fallback. |
-| `NetRumble.Platform.GameCore` | The only assembly that knows the GDK exists: XBOX GDK.NET, native handles, runtime lifetime | Yes. This is the disposable one. |
-| `NetRumble.Platform.PlayFab` | Lobby discovery, the authentication exchange, the PlayFab cloud save tier | Yes |
+| `NetRumble.Platform.GameCore` | Xbox services through XBOX GDK.NET, native handles, runtime lifetime | Yes. This is the disposable one. |
+| `NetRumble.Platform.PlayFab` | Native GDK.Net authentication, connected Lobby discovery and PlayFab user-data cloud saves | Yes |
 | `NetRumble.Platform.Lan` | A UDP transport that needs no GDK, title or account | Yes |
 | `NetRumble.Core` | Simulation, match flow, netcode messages | No |
 | `NetRumble.Game` | MonoGame rendering, input, audio, UI | No |
@@ -69,6 +69,10 @@ The invariant did not change. Only its enforcement point moved. Any provider bui
 thread-pool completions needs the same treatment.
 
 This is the reason gameplay, UI and netcode code contain no locks and no dispatcher.
+
+PlayFab Lobby operations are issued and their state changes drained from that same
+runtime pump. The developer PlayFab decorator also owns a native runtime and pumps its
+Lobby client; adding PlayFab to LAN does not turn LAN traffic into Party traffic.
 
 > [!IMPORTANT]
 > MonoGame installs no `SynchronizationContext`, so a bare `await` resumes on a thread-pool

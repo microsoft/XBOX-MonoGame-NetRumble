@@ -2,8 +2,8 @@
 
 The three binaries in this folder are the Microsoft PlayFab Party redistributable and its
 dependencies. They are vendored for two reasons: so that `tools/NetRumble.PlatformSpike`
-can exercise the real native ABI, which `PartyInteropChecks` does, and so that a clone of
-this repository builds with nothing else beside it on disk.
+can exercise the real native ABI, which `PartyInteropChecks` does, and as desktop
+fallbacks when the matching binaries are absent from an installed GDK.
 
 | File | Version |
 |---|---|
@@ -17,8 +17,8 @@ Party loads `PlayFabCore.dll` and `libHttpClient.dll` itself through the normal 
 order, so all three have to sit next to the executable. Resolving `Party.dll` alone from
 this folder leaves it to fault when it reaches for its siblings.
 
-The `PartyRedistributable` item group in `NetRumble.PlatformSpike.csproj` does this, and it
-matches the shipping layout anyway.
+`NetRumble.Platform.GameCore.csproj` stages installed desktop GDK binaries and falls back
+to these three copies when absent. Those content items flow to both the game and spike.
 
 ## Which target these are correct for
 
@@ -29,8 +29,10 @@ dependencies from the installed GDK instead. See
 
 ## Not vendored here
 
-`Microsoft.Xbox.Services.C.Thunks.dll`. The same project copies it out of an installed
-Microsoft GDK.
+`PlayFabServices.dll`, `PlayFabMultiplayer.dll`, `XCurl.dll`, and
+`Microsoft.Xbox.Services.C.Thunks.dll` come from an installed Microsoft GDK. Native
+PlayFab sign-in, user data and connected lobbies require the matching runtime libraries;
+these three vendored files alone are not sufficient.
 
 ## Upgrading
 

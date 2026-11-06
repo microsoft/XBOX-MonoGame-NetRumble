@@ -26,7 +26,7 @@
         NetRumblePC.exe; the repo's MicrosoftGame.config declares the console executable
         too, and MakePkg rejects a layout that is missing an executable its config names.
         See packaging\MicrosoftGame.PC.config.
-      * Party.dll, PlayFabCore.dll, PlayFabServices.dll, libHttpClient.dll,
+      * Party.dll, PlayFabCore.dll, PlayFabServices.dll, PlayFabMultiplayer.dll, libHttpClient.dll,
         Microsoft.Xbox.Services.C.Thunks.dll and XCurl.dll. These are redistributables,
         not system components: nothing installs them machine-wide, and inside the package
         sandbox only what the layout carries is loadable. Without them the title installs
@@ -42,7 +42,7 @@
     and libHttpClient only: they are Gaming.Desktop builds, so they are the right
     architecture for this target - which is exactly why the console build refuses them -
     but the set is incomplete, and a package built from the fallback is missing Xbox
-    Services and PlayFab Services.
+    Services, PlayFab Services and PlayFab Multiplayer.
 
 .PARAMETER Configuration
     Release by default. Debug layouts are fine for loose deployment and local installs
@@ -174,6 +174,7 @@ $redists = @(
     @{ Name = 'PlayFabCore.dll';                    Vendored = $true;  Required = $true },
     @{ Name = 'libHttpClient.dll';                  Vendored = $true;  Required = $true },
     @{ Name = 'PlayFabServices.dll';                Vendored = $false; Required = $true },
+    @{ Name = 'PlayFabMultiplayer.dll';             Vendored = $false; Required = $true },
     @{ Name = 'Microsoft.Xbox.Services.C.Thunks.dll'; Vendored = $false; Required = $true },
     @{ Name = 'XCurl.dll';                          Vendored = $false; Required = $false }
 )

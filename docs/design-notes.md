@@ -46,10 +46,41 @@ A capability flag means the whole path works end to end. The provider does not a
 
 ### Compose orthogonal services as layers
 
-PlayFab cloud save and lobby discovery are independent of both the transport and the
-platform runtime, so they compose over whichever provider is active. That is what makes
+PlayFab cloud save and lobby discovery are independent of the transport, so they compose
+over whichever provider is active. They use the native GDK runtime even in developer
+modes. That is what makes
 `--platform=lan --playfab-title=<id>` work without an enum value for every combination of
 transport and cloud tier.
+
+### Use one native PlayFab identity
+
+Xbox login uses `PlayFabLocalUser.LoginAsync` once. The resulting entity serves Party,
+Lobby and the typed `PlayerDataManagement` user-data wrappers. No second Xbox-token
+exchange, client session ticket, custom HTTP client or REST request DTO is needed.
+Custom-ID authentication uses the native Authentication wrapper and remains Debug-only.
+
+The service owns the native entity; cloud operations borrow duplicate handles so signing
+out cannot dispose the identity underneath an in-flight call. Shutdown cancels work and
+drains borrowers before the Gaming Runtime is released. Xbox replacement login first
+clears the previous identity and invalidates older sign-ins, even if the new login fails.
+Provider shutdown awaits native sign-ins and entity borrowers independently of the
+budget for pump-driven Party and Xbox Services teardown.
+
+Lobby uses connected native lobbies with owner migration disabled. Operations and result
+snapshots run on the frame pump; canceled create/join completions leave their lobbies
+rather than publishing stale matches. Entity tokens are renewed through GDK.Net and
+supplied to the Multiplayer manager. Hosts close discovery and membership before leaving,
+instead of calling the server-only delete API. Retryable token-refresh failures are logged
+and retried after ten seconds without disconnecting the match. Terminal refresh failures
+stop retries and report connection loss; native Lobby disconnections still report loss.
+Account changes retire Lobby operations across subsequent frame pumps, with a one-second
+cleanup deadline, rather than blocking a frame. New requests wait until the old manager
+is released. Only final shutdown actively drains completions while waiting. Lobby loss
+disposes Party and clears pending session work before notifying the game; expired
+sign-in also clears the shared PlayFab identity so another Host or Join can authenticate.
+
+The user-data payload format is unchanged: Base64 under the existing keys, with a
+750-byte limit. XGameSave remains the default console cloud tier.
 
 ## Connectivity and lifecycle
 

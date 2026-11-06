@@ -40,8 +40,10 @@ The GDK provider saves to GDK connected storage (`XGameSave`), so settings, achi
 stats and match history roam together and the platform resolves conflicts.
 
 The PlayFab user-data tier it replaced is still selectable with
-`/p:NetRumbleCloudSave=PlayFab`, and it is what the desktop provider uses when no GDK is
-present, because connected storage needs a GDK user handle.
+`/p:NetRumbleCloudSave=PlayFab`. The PlayFab developer decorator also uses this tier
+because it has no Xbox user handle for connected storage. Both paths now require the
+native Gaming Runtime and PlayFab libraries; only undecorated offline/LAN runs are
+GDK-free.
 
 Neither tier has been round-tripped between two devices. See
 [Known gaps](known-gaps.md#never-observed-end-to-end).

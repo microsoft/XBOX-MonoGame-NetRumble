@@ -12,6 +12,14 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args.Contains("--playfab-checks-only", StringComparer.OrdinalIgnoreCase))
+        {
+            return await PlayFabChecks.Run().ConfigureAwait(false);
+        }
+        if (args.Contains("--playfab-native-smoke", StringComparer.OrdinalIgnoreCase))
+        {
+            return PlayFabChecks.NativeSmoke();
+        }
         var mode = PlatformProviderFactory.ResolveMode(args);
 
         // Resolved from --playfab-title=<id> or NETRUMBLE_PLAYFAB_TITLE_ID. With a real
@@ -51,7 +59,7 @@ internal static class Program
         await PlatformServicesChecks.Run(platform).ConfigureAwait(false);
         await GameCorePartyAndActivityChecks.Run(mode).ConfigureAwait(false);
         await LanTransportChecks.Run().ConfigureAwait(false);
-        await PlayFabRestChecks.Run().ConfigureAwait(false);
+        await PlayFabChecks.Run().ConfigureAwait(false);
         FontCoverageChecks.Run();
         await IdentityChecks.Run().ConfigureAwait(false);
         MatchEndChecks.Run();

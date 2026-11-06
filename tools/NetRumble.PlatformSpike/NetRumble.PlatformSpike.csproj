@@ -28,37 +28,18 @@
     <ProjectReference Include="..\..\src\NetRumble.Platform.PlayFab\NetRumble.Platform.PlayFab.csproj" />
   </ItemGroup>
 
-  <!--
-    Stage the PlayFab Party redistributable next to the harness so PartyInteropChecks can
-    call the real ABI. The binaries are vendored in third_party/party/ - see the README
-    there for provenance. They used to be borrowed from the Godot project's addon folder,
-    which no longer sits above this repo now that the port stands on its own.
-
-    Party loads its siblings itself, so pointing the resolver at the vendored folder is not
-    enough - they have to sit beside the executable, which is the shipping layout anyway.
-  -->
-  <ItemGroup>
-    <PartyRedistributable Include="$(MSBuildThisFileDirectory)..\..\third_party\party\Party.dll" />
-    <PartyRedistributable Include="$(MSBuildThisFileDirectory)..\..\third_party\party\PlayFabCore.dll" />
-    <PartyRedistributable Include="$(MSBuildThisFileDirectory)..\..\third_party\party\libHttpClient.dll" />
-    <None Include="@(PartyRedistributable)">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <Link>%(Filename)%(Extension)</Link>
-    </None>
-  </ItemGroup>
+  <!-- PlayFab and Party redistributables flow from the GameCore project reference. -->
 
   <!--
     Stage the Xbox Services (XSAPI) redistributable next to the harness so
     XblInteropChecks - and GameCoreXblContext at runtime - can call the real ABI, the
-    same way PartyRedistributable stages Party.dll above. Unlike xgameruntime.dll (whose
+    same way the GameCore reference stages Party.dll. Unlike xgameruntime.dll (whose
     flat API is linked in statically and never shipped as a DLL, per GameRuntimeProbe's
     remarks), Microsoft.Xbox.Services.C.Thunks.dll is a genuine redistributable with
     real code in it, so it has to be found on disk - there is no installed-GDK search
     path fallback for it the way there is for the shim's own build step.
 
-    Only libHttpClient.dll is an extra dependency (checked with dumpbin /dependents);
-    the Party copy above already provides a compatible one, so it is not duplicated
-    here.
+    libHttpClient.dll is staged by the GameCore project reference.
   -->
   <ItemGroup>
     <XblRedistributable Include="C:\Program Files (x86)\Microsoft GDK\*\windows\bin\x64\Microsoft.Xbox.Services.C.Thunks.dll" />
@@ -67,7 +48,8 @@
       <Link>Microsoft.Xbox.Services.C.Thunks.dll</Link>
     </None>
   </ItemGroup>
-  <!--
+
+  <!--
     Stage the title's MicrosoftGame.config beside the harness. Unpackaged GDK processes
     take their title identity from this file in the executable's own folder, and without
     it XGameGetXboxTitleId returns ERROR_NOT_FOUND (0x80070490) - which fails
