@@ -840,7 +840,12 @@ public sealed class LobbyScreen : Screen
         // revoked, or resolved, in between. useCache:false forces a live query at the
         // one point that matters: immediately before HostAsync/JoinAsync actually stands
         // up the session.
-        var verdict = await context.Platform.Privileges.CheckAsync(GamePrivilege.Multiplayer, useCache: false);
+        var verdict = await context.Platform.Privileges.EnsureAsync(GamePrivilege.Multiplayer);
+
+        if (_transitioning || context.Screens.Find<LobbyScreen>() != this)
+        {
+            return;
+        }
 
         if (!verdict.Allowed)
         {
