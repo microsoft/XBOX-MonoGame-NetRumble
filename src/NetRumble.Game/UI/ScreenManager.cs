@@ -174,9 +174,16 @@ public sealed class ScreenManager
 
         top.Update(context);
 
+        // Space also binds Accept; Ready must win before a focused widget consumes it.
+        if (context.Input.Pressed(MenuAction.ToggleReady)
+            && (top.HandleAction(context, MenuAction.ToggleReady) || !ReferenceEquals(Current, top)))
+        {
+            return;
+        }
+
         foreach (var action in Enum.GetValues<MenuAction>())
         {
-            if (action == MenuAction.None || !context.Input.Pressed(action))
+            if (action is MenuAction.None or MenuAction.ToggleReady || !context.Input.Pressed(action))
             {
                 continue;
             }

@@ -79,6 +79,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         // the same thread every other provider event does.
         _runtime.Activity = activity;
         _runtime.Party = (GameCorePartyService)Party;
+        _runtime.Online = _online;
     }
 
     public string Name => "Microsoft GDK (GDK.Net)";
@@ -233,7 +234,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         // user that sign-out has already released.
         _saves.Dispose();
 #endif
-        _online.Dispose();
+        _runtime.PumpUntil(_online.ShutdownAsync(), RemainingUntil(deadline));
         await _runtime.ShutdownAsync().ConfigureAwait(false);
         await _fallback.DisposeAsync().ConfigureAwait(false);
     }

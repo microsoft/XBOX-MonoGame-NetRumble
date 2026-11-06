@@ -15,7 +15,7 @@ namespace NetRumble.Platform.GameCore.Services;
 /// <remarks>
 /// <para>
 /// <b>Why this rather than PlayFab user data.</b> The cloud tier used to be PlayFab
-/// <c>/Client/UpdateUserData</c>, which works anywhere and needs no console - but it is
+/// user data, now accessed through GDK.Net's native wrappers - but it is
 /// not the save system XBOX certification is written against. Connected storage is what
 /// roams: the platform syncs a container between every device the account signs in on,
 /// resolves conflicts, survives the title being suspended mid-write, and is what the

@@ -93,19 +93,22 @@ what you need. The general lesson: probe for an export you actually call rather 
 file name, and when a native SDK ships a `.lib` beside its headers, check whether the API
 lives in the library before writing a single `DllImport`.
 
-### PlayFab's native SDK cannot complete async calls from managed code
+### PlayFab's native SDK cannot start or complete async calls
 
 **Symptom.** The native PlayFab DLLs appear to export the functions you want, but managed
 code cannot complete the async operations they return.
 
-**Cause.** `PlayFabCore.dll`, `PlayFabServices.dll`, `PlayFabMultiplayer.dll`,
-`libHttpClient.dll` and `Party.dll` export no `XAsync*` or `XTaskQueue*` symbols, so there
-is no way to drive their completion from managed code. A task queue created through the GDK
-is not interchangeable with the desktop PlayFab implementation either.
+**Cause.** PlayFab needs the Gaming Runtime's async support. Its own DLLs do not export
+the `XAsync*` and `XTaskQueue*` entry points, and starting the libraries without the
+Gaming Runtime is not supported.
 
-**Fix.** Call PlayFab's documented HTTPS JSON API from plain C#. This sample's
-`PlayFabRestClient` handles URLs, token headers, envelopes, error mapping and response
-parsing with no GDK or native dependency.
+**Fix.** Use GDK.Net's native wrappers. Initialize the Gaming Runtime before
+`PlayFabRuntime.Initialize()`, and stage matching `xgameruntime.thunks.dll`,
+`PlayFabCore.dll`, `PlayFabServices.dll`, `PlayFabMultiplayer.dll` and
+`libHttpClient.dll` beside the executable (plus the SDK's HTTP dependencies).
+The GameCore project stages the installed desktop redistributables; console packaging
+uses the Xbox GDK copies instead. Pump Lobby state changes every frame while awaiting
+lobby operations. There is no hand-written HTTP fallback, including in developer modes.
 
 ### Settings do not persist in a packaged build
 
