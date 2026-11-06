@@ -1,3 +1,4 @@
+using System.Reflection;
 using GDK.Net;
 using GDK.Net.PlayFab;
 using NetRumble.Platform;
@@ -7,6 +8,7 @@ using NetRumble.Platform.PlayFab;
 using GDK.Net.PlayFab.Multiplayer;
 using NetRumble.Platform.GameCore;
 using NetRumble.Platform.GameCore.Interop;
+using NetRumble.Platform.GameCore.Services;
 
 namespace NetRumble.PlatformSpike;
 
@@ -55,6 +57,9 @@ internal static class PlayFabChecks
             await services.ShutdownAsync();
             Check("shutdown refuses further entity leases", services.AcquireEntity() is null);
         }
+
+        await AccountSwitchFailureCheck(config, Check);
+        TokenRefreshFailureChecks(config, Check);
 
         Check("adult account creation remains allowed", PlatformAgeGroup.Adult.AllowsSilentAccountCreation());
         Check("child account creation remains forbidden", !PlatformAgeGroup.Child.AllowsSilentAccountCreation());
@@ -198,6 +203,76 @@ internal static class PlayFabChecks
 
     private static PlatformResult Map(int hr)
         => PlayFabFailure.FromException(new PlayFabException(hr), "The request failed.");
+
+    private static async Task AccountSwitchFailureCheck(
+        PlayFabConfiguration config, Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var online = new GameCoreOnlineSession(new GameCoreRuntime(), config);
+        var services = (PlayFabOnlineServices)typeof(GameCoreOnlineSession)
+            .GetField("_services", Flags)!.GetValue(online)!;
+        var sessionField = typeof(PlayFabOnlineServices).GetField("_session", Flags)!;
+        var generationField = typeof(PlayFabOnlineServices).GetField("_generation", Flags)!;
+        sessionField.SetValue(services, new PlayFabSession
+        {
+            EntityId = "account-a",
+            EntityType = "title_player_account",
+            PlayFabId = "player-a",
+        });
+        var generation = (long)generationField.GetValue(services)!;
+        var signOuts = 0;
+        services.SessionChanged += session => { if (session is null) { signOuts++; } };
+        check("account-switch fixture starts with the previous identity",
+            online.IsSignedIn && online.EntityId == "account-a");
+
+        // The uninitialized runtime rejects the replacement before accessing the Xbox user.
+        var result = await online.SignInAsync(null!, allowAccountCreation: false);
+        check("replacement login reports runtime failure", result.Status == PlatformStatus.Unavailable);
+        check("failed replacement login clears the previous identity",
+            !online.IsSignedIn && online.EntityId.Length == 0 && services.Session is null);
+        check("replacement login notifies identity consumers of sign-out", signOuts == 1);
+        check("replacement login invalidates older in-flight sign-ins",
+            (long)generationField.GetValue(services)! > generation);
+    }
+
+    private static void TokenRefreshFailureChecks(
+        PlayFabConfiguration config, Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var lobbies = new PlayFabLobbyClient(config, () => null);
+        var failed = typeof(PlayFabLobbyClient).GetMethod("TokenRefreshFailed", Flags)!;
+        var refreshAt = typeof(PlayFabLobbyClient).GetField("_refreshTokenAt", Flags)!;
+        var disconnects = new List<PlatformResult>();
+        lobbies.ConnectionLost += disconnects.Add;
+        Exception[] retryable =
+        [
+            new OperationCanceledException(),
+            new PlayFabException(unchecked((int)0x80072EE2)),
+            new PlayFabException(unchecked((int)0x80072EFD)),
+            new PlayFabException(PlayFabErrors.ApiClientRequestRateLimitExceeded),
+            new PlayFabException(PlayFabErrors.LobbyRateLimitExceeded),
+            new PlayFabException(PlayFabErrors.ServiceUnavailable),
+            new PlayFabException(PlayFabErrors.DownstreamServiceUnavailable),
+        ];
+        foreach (var error in retryable)
+        {
+            var before = DateTimeOffset.UtcNow;
+            failed.Invoke(lobbies, [error]);
+            var after = DateTimeOffset.UtcNow;
+            var next = (DateTimeOffset)refreshAt.GetValue(lobbies)!;
+            var label = $"{error.GetType().Name} 0x{error.HResult:X8}";
+            check($"retryable refresh {label} does not disconnect", disconnects.Count == 0);
+            check($"retryable refresh {label} schedules a ten-second retry",
+                next >= before.AddSeconds(10) && next <= after.AddSeconds(10));
+        }
+
+        disconnects.Clear();
+        failed.Invoke(lobbies, [new PlayFabException(PlayFabErrors.Noentitytoken)]);
+        check("terminal token loss notifies the connection consumer",
+            disconnects.Count == 1 && disconnects[0].Status == PlatformStatus.NotSignedIn);
+        check("terminal token loss stops refresh retries",
+            (DateTimeOffset)refreshAt.GetValue(lobbies)! == DateTimeOffset.MaxValue);
+    }
 
     internal static int NativeSmoke()
     {

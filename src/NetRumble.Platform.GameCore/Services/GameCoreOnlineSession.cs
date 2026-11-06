@@ -37,9 +37,8 @@ internal sealed class GameCoreOnlineSession : IDisposable
     internal async Task<PlatformResult<PlayFabSession>> SignInAsync(
         User user, bool allowAccountCreation, CancellationToken cancellationToken = default)
     {
-        _lastSignInFailure = string.Empty;
-        _lastSignInDiagnostics = null;
-        _lastSignInStatus = PlatformStatus.Ok;
+        // A replacement login must not retain the previous account if it fails.
+        SignOut();
         if (_disposed || !_runtime.IsInitialized || _runtime.Runtime is null)
         {
             return RememberFailure(PlatformResult<PlayFabSession>.Unavailable(

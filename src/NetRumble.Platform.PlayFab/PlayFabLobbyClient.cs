@@ -430,9 +430,15 @@ internal sealed class PlayFabLobbyClient : IDisposable
 
     private void TokenRefreshFailed(Exception ex)
     {
-        _refreshTokenAt = DateTimeOffset.UtcNow.AddSeconds(10);
+        var failure = PlayFabFailure.FromException(ex, "The match directory could not refresh your sign-in.");
+        var retryable = failure.Status is PlatformStatus.NetworkFailure or PlatformStatus.TimedOut
+            or PlatformStatus.Canceled;
+        _refreshTokenAt = retryable ? DateTimeOffset.UtcNow.AddSeconds(10) : DateTimeOffset.MaxValue;
         CrashLog.Mark($"playfab: Lobby token refresh failed: {ex.Message}");
-        ConnectionLost?.Invoke(PlayFabFailure.FromException(ex, "The match directory could not refresh your sign-in."));
+        if (!retryable)
+        {
+            ConnectionLost?.Invoke(failure);
+        }
     }
 
     internal static DateTimeOffset RefreshAt(EntityToken token, DateTimeOffset now)
