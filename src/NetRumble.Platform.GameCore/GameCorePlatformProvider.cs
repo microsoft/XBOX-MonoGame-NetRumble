@@ -1,6 +1,5 @@
 using NetRumble.Platform.GameCore.Interop;
 using NetRumble.Platform.GameCore.Services;
-using NetRumble.Platform.Offline;
 using NetRumble.Platform.PlayFab;
 
 namespace NetRumble.Platform.GameCore;
@@ -11,10 +10,8 @@ namespace NetRumble.Platform.GameCore;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Partial by design.</b> Runtime and identity are GDK-backed; the remaining
-/// services still delegate to their offline counterparts and are filled in through
-/// Phase 5 and Phase 6. Because <see cref="Capabilities"/> reports only what is really
-/// wired, the game hides the rest rather than calling into a stub.
+/// Runtime, identity and online services are GDK-backed. <see cref="Capabilities"/>
+/// reports only the services whose native dependencies are available.
 /// </para>
 /// <para>
 /// <b>Replacing this provider.</b> A standalone C# GDK would replace this class and the
@@ -28,13 +25,12 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     private readonly GameCoreRuntime _runtime;
     private readonly GameCoreXblContext _xbl;
     private readonly GameCoreOnlineSession _online;
-    private readonly OfflinePlatformProvider _fallback;
     private readonly GameCoreGameSaveService _saves;
 
     public GameCorePlatformProvider(string? saveRoot = null, PlayFabConfiguration? playFab = null)
     {
         _runtime = new GameCoreRuntime();
-        _fallback = new OfflinePlatformProvider(saveRoot);
+        GameInput = new NullGameInputService();
         _online = new GameCoreOnlineSession(
             _runtime,
             playFab ?? new PlayFabConfiguration { TitleId = PlayFabConfiguration.PlaceholderTitleId });
@@ -55,7 +51,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         Social = new GameCoreSocialService(_runtime, identity, _xbl);
         Moderation = new GameCoreModerationService(_runtime, identity, _xbl);
         Privacy = new GameCorePrivacyService(_runtime, identity, _xbl);
-        PlatformUi = new GameCorePlatformUiService(_runtime, identity);
+        PlatformUi = new GameCorePlatformUiService(_runtime);
 
         Party = new GameCorePartyService(
             _runtime, identity, _online, _online.Configuration, (GameCoreModerationService)Moderation);
@@ -151,13 +147,13 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     public IGameSaveService GameSaves => _saves;
 
     /// <summary>
-    /// Delegated on purpose, not left unimplemented. <c>docs/platform-abstraction.md</c>
+    /// A null service on purpose, not left unimplemented. <c>docs/platform-abstraction.md</c>
     /// assigns <see cref="IGameInputService"/> to MonoGame's own <c>GamePad</c>/<c>Keyboard</c>
     /// APIs rather than the GDK's GameInput SDK - the Godot source's GameInput usage is
     /// for controller identification/haptics on console, which is a <c>NetRumble.Game</c>
     /// concern outside this provider's scope, not a gap in this phase's work.
     /// </summary>
-    public IGameInputService GameInput => _fallback.GameInput;
+    public IGameInputService GameInput { get; }
 
     /// <summary>
     /// Tears down the provider.
@@ -201,7 +197,6 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         await _saves.ShutdownAsync().ConfigureAwait(false);
         await _online.ShutdownAsync().ConfigureAwait(false);
         await _runtime.ShutdownAsync().ConfigureAwait(false);
-        await _fallback.DisposeAsync().ConfigureAwait(false);
     }
 
     /// <summary>

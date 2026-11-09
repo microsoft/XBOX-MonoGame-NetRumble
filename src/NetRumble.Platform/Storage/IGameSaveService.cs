@@ -10,8 +10,8 @@ namespace NetRumble.Platform;
 /// </para>
 /// <para>
 /// Two tiers. <see cref="SaveLocalAsync"/> always works — it is plain local storage
-/// and backs settings and match history so the front end runs offline. Cloud methods
-/// are best-effort and no-op without a signed-in user.
+/// and backs account-scoped settings and match history. Cloud methods require a
+/// signed-in GDK user and report failure when the platform is unavailable.
 /// </para>
 /// </remarks>
 public interface IGameSaveService

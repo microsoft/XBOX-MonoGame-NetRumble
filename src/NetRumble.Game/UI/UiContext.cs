@@ -75,22 +75,6 @@ public sealed class UiContext
     public required Random Random { get; init; }
 
     /// <summary>
-    /// The developer identity override from <c>--pf-user=</c> or <c>PF_CUSTOM_ID</c>, or
-    /// null on a normal run. Every call to
-    /// <see cref="NetRumble.Platform.IIdentityService.SignInAsync"/> must forward this, or
-    /// the instance signs in anonymously as "Player" and the PlayFab custom-id path
-    /// refuses to run for want of an id.
-    /// </summary>
-    public string? DeveloperCustomId { get; init; }
-
-    /// <summary>
-    /// The sign-in options every screen should use, so the developer override is carried
-    /// consistently rather than remembered at each call site.
-    /// </summary>
-    public SignInOptions InteractiveSignIn =>
-        SignInOptions.Interactive with { DeveloperCustomId = DeveloperCustomId };
-
-    /// <summary>
     /// The full UI area, in design-resolution units. Screens lay out against this rather
     /// than the backbuffer, matching how Godot authored every control against the
     /// 1920x1080 viewport and let the stretch mode scale it.

@@ -31,7 +31,7 @@ dependencies from the installed GDK instead. See
 
 `PlayFabServices.dll`, `PlayFabMultiplayer.dll`, `XCurl.dll`, and
 `Microsoft.Xbox.Services.C.Thunks.dll` come from an installed Microsoft GDK. Native
-PlayFab sign-in, user data and connected lobbies require the matching runtime libraries;
+PlayFab sign-in and connected lobbies require the matching runtime libraries;
 these three vendored files alone are not sufficient.
 
 ## Upgrading

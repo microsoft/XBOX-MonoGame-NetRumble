@@ -20,7 +20,7 @@ namespace NetRumble.Platform.GameCore.Interop;
 /// A desktop GDK may export these and never deliver a notification, and a partial SDK
 /// may not export them at all. Neither case may crash the game, so the delegates are
 /// resolved through <see cref="NativeLibrary.TryGetExport"/> and a missing export
-/// degrades to "no lifecycle events", exactly as an absent GDK degrades to offline.
+/// degrades to "no lifecycle events".
 /// </para>
 /// <para>
 /// <b>The callbacks arrive on an OS thread, not the pump.</b> Everything here does is

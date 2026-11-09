@@ -80,6 +80,11 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
     /// from in the first place.
     /// </summary>
     private readonly GameCoreModerationService? _moderation;
+    private readonly object _stateGate = new();
+    private readonly Queue<Action> _afterPump = new();
+    private bool _pumping;
+    private bool _disposeAfterPump;
+    private int _sessionRevision;
     private readonly Dictionary<PartyOperationId, PendingOperation> _pendingOperations = [];
     private readonly List<PendingRegions> _pendingRegions = [];
     private readonly Dictionary<ushort, int> _endpointToPeer = [];
@@ -174,14 +179,17 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         get => _chatAllowed;
         set
         {
-            if (_chatAllowed == value)
+            lock (_stateGate)
             {
-                return;
-            }
+                if (_chatAllowed == value)
+                {
+                    return;
+                }
 
-            _chatAllowed = value;
-            ApplyChatPolicy();
-            ChatChanged?.Invoke();
+                _chatAllowed = value;
+                ApplyChatPolicy();
+                ChatChanged?.Invoke();
+            }
         }
     }
 
@@ -190,14 +198,17 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         get => _isSelfMuted;
         set
         {
-            if (_isSelfMuted == value)
+            lock (_stateGate)
             {
-                return;
-            }
+                if (_isSelfMuted == value)
+                {
+                    return;
+                }
 
-            _isSelfMuted = value;
-            ApplyLocalMute();
-            ChatChanged?.Invoke();
+                _isSelfMuted = value;
+                ApplyLocalMute();
+                ChatChanged?.Invoke();
+            }
         }
     }
 
@@ -249,9 +260,14 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             }
 
             stage = "creating the Party network";
-            var create = _party!.CreateNewNetwork(_partyUser!, NetworkConfiguration(maxPlayers), regions);
-            var created = await AwaitOperationAsync<PartyCreateNewNetworkCompleted>(
-                create.Operation, cancellationToken).ConfigureAwait(false);
+            Task<PartyCreateNewNetworkCompleted> creation;
+            lock (_stateGate)
+            {
+                ThrowIfSessionEnded();
+                var create = _party!.CreateNewNetwork(_partyUser!, NetworkConfiguration(maxPlayers), regions);
+                creation = AwaitOperationAsync<PartyCreateNewNetworkCompleted>(create.Operation, cancellationToken);
+            }
+            var created = await creation.ConfigureAwait(false);
             if (!created.Succeeded)
             {
                 await LeaveAsync().ConfigureAwait(false);
@@ -262,11 +278,16 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                     Describe(created));
             }
 
-            var descriptor = created.Descriptor.Serialize();
-            _hostEntityId = _online!.EntityId;
-            _hostToken = PartyHostToken.Create(_hostEntityId);
-            IsHost = true;
-            MarkEntity(_hostEntityId, IPartyService.HostPeerId);
+            string descriptor;
+            lock (_stateGate)
+            {
+                ThrowIfSessionEnded();
+                descriptor = created.Descriptor.Serialize();
+                _hostEntityId = _online!.EntityId;
+                _hostToken = PartyHostToken.Create(_hostEntityId);
+                IsHost = true;
+                MarkEntity(_hostEntityId, IPartyService.HostPeerId);
+            }
 
             stage = "connecting the host endpoint and chat";
             var connected = await ConnectAuthenticateEndpointAndChatAsync(
@@ -281,12 +302,16 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                     connected.Diagnostics);
             }
 
-            MarkLocalEndpoint(IPartyService.HostPeerId);
-            ConnectionString = EncodeInvite(
-                descriptor,
-                created.AppliedInitialInvitationIdentifier,
-                _hostToken,
-                protocolVersion);
+            lock (_stateGate)
+            {
+                ThrowIfSessionEnded();
+                MarkLocalEndpoint(IPartyService.HostPeerId);
+                ConnectionString = EncodeInvite(
+                    descriptor,
+                    created.AppliedInitialInvitationIdentifier,
+                    _hostToken,
+                    protocolVersion);
+            }
 
             stage = "creating the PlayFab lobby";
             var lobby = await _online.Lobbies.CreateLobbyWithJoinCodeAsync(
@@ -316,10 +341,14 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                     lobby.Result.Diagnostics);
             }
 
-            _lobbyId = lobby.Value.LobbyId;
-            JoinCode = lobby.Value.JoinCode;
-            HasNetwork = true;
-            return PlatformResult<string>.Ok(JoinCode);
+            lock (_stateGate)
+            {
+                ThrowIfSessionEnded();
+                _lobbyId = lobby.Value.LobbyId;
+                JoinCode = lobby.Value.JoinCode;
+                HasNetwork = true;
+                return PlatformResult<string>.Ok(JoinCode);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -469,70 +498,60 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     public async Task LeaveAsync()
     {
-        if (!HasNetwork && _network is null && _party is null)
+        int revision;
+        bool wasHost;
+        string lobbyId;
+        lock (_stateGate)
         {
-            ResetSessionState();
-            return;
-        }
-
-        // Captured before teardown clears them: the finally block below needs to know
-        // whether this peer owned the lobby it is about to release.
-        var wasHost = IsHost;
-
-        // #25: the host leaving must take the session down rather than leave a lobby
-        // that is still advertised but no longer joinable. Party's own destruction
-        // notice does not reliably reach a peer sitting in the lobby, so the host says
-        // so explicitly first, while its endpoint is still up. Best-effort by nature -
-        // a guaranteed send that never lands is exactly the case the members' own
-        // transport timeout still covers.
-        if (wasHost && HasNetwork && _localEndpoint is not null)
-        {
-            try
+            if (!HasNetwork && _network is null && _party is null)
             {
-                _localEndpoint.SendMessage(
-                    Array.Empty<PartyEndpoint>(),
-                    ControlMessage(ControlKindHostClosing),
-                    PartySendMessageOptions.GuaranteedDelivery);
+                ResetSessionState();
+                return;
             }
-            catch (Exception ex) when (IsPlatformException(ex))
-            {
-                CrashLog.MarkOnce("host-closing", $"party: host-closing notice failed: {ex.Message}");
-            }
-        }
 
+            // Captured before teardown clears them: the finally block below needs to know
+            // whether this peer owned the lobby it is about to release.
+            wasHost = IsHost;
+            lobbyId = _lobbyId;
+            revision = _sessionRevision;
+
+            // #25: the host leaving must take the session down rather than leave a lobby
+            // that is still advertised but no longer joinable. Party's own destruction
+            // notice does not reliably reach a peer sitting in the lobby, so the host says
+            // so explicitly first, while its endpoint is still up. Best-effort by nature -
+            // a guaranteed send that never lands is exactly the case the members' own
+            // transport timeout still covers.
+            if (wasHost && HasNetwork && _localEndpoint is not null)
+            {
+                try
+                {
+                    _localEndpoint.SendMessage(
+                        Array.Empty<PartyEndpoint>(),
+                        ControlMessage(ControlKindHostClosing),
+                        PartySendMessageOptions.GuaranteedDelivery);
+                }
+                catch (Exception ex) when (IsPlatformException(ex))
+                {
+                    CrashLog.MarkOnce("host-closing", $"party: host-closing notice failed: {ex.Message}");
+                }
+            }
+
+            _leaving = true;
+        }
         using var teardownBudget = new CancellationTokenSource(LeaveTeardownBudget);
-        _leaving = true;
         try
         {
-            if (_network is not null)
-            {
-                if (_localChat is not null)
-                {
-                    await TryAwait(_network.DisconnectChatControl(_localChat), teardownBudget.Token).ConfigureAwait(false);
-                }
-
-                if (_localEndpoint is not null)
-                {
-                    await TryAwait(_network.DestroyEndpoint(_localEndpoint), teardownBudget.Token).ConfigureAwait(false);
-                }
-
-                if (_partyUser is not null)
-                {
-                    await TryAwait(_network.RemoveLocalUser(_partyUser), teardownBudget.Token).ConfigureAwait(false);
-                }
-
-                await TryAwait(_network.Leave(), teardownBudget.Token).ConfigureAwait(false);
-            }
-
-            if (_party is not null && _localChat is not null)
-            {
-                await TryAwait(_party.LocalDevice.DestroyChatControl(_localChat), teardownBudget.Token).ConfigureAwait(false);
-            }
-
-            if (_party is not null && _partyUser is not null)
-            {
-                await TryAwait(_party.DestroyLocalUser(_partyUser), teardownBudget.Token).ConfigureAwait(false);
-            }
+            await TryTeardownAsync(() => _network is not null && _localChat is not null
+                ? _network.DisconnectChatControl(_localChat) : null, revision, teardownBudget.Token).ConfigureAwait(false);
+            await TryTeardownAsync(() => _network is not null && _localEndpoint is not null
+                ? _network.DestroyEndpoint(_localEndpoint) : null, revision, teardownBudget.Token).ConfigureAwait(false);
+            await TryTeardownAsync(() => _network is not null && _partyUser is not null
+                ? _network.RemoveLocalUser(_partyUser) : null, revision, teardownBudget.Token).ConfigureAwait(false);
+            await TryTeardownAsync(() => _network?.Leave(), revision, teardownBudget.Token).ConfigureAwait(false);
+            await TryTeardownAsync(() => _party is not null && _localChat is not null
+                ? _party.LocalDevice.DestroyChatControl(_localChat) : null, revision, teardownBudget.Token).ConfigureAwait(false);
+            await TryTeardownAsync(() => _party is not null && _partyUser is not null
+                ? _party.DestroyLocalUser(_partyUser) : null, revision, teardownBudget.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (teardownBudget.IsCancellationRequested)
         {
@@ -548,228 +567,296 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 CrashLog.MarkOnce("party-leave-budget", "party: leave teardown stopped waiting after its budget.");
             }
 
-            if (_online is not null && _lobbyId.Length > 0)
+            try
             {
-                // Close discovery and joins before the non-migrating owner leaves.
-                if (wasHost)
+                if (_online is not null && lobbyId.Length > 0)
                 {
-                    var removed = await _online.Lobbies.CloseAndLeaveLobbyAsync(_lobbyId).ConfigureAwait(false);
-                    if (removed.Failed)
+                    // Close discovery and joins before the non-migrating owner leaves.
+                    if (wasHost)
                     {
-                        CrashLog.Mark($"party: lobby close failed: {removed}");
+                        var removed = await _online.Lobbies.CloseAndLeaveLobbyAsync(lobbyId).ConfigureAwait(false);
+                        if (removed.Failed)
+                        {
+                            CrashLog.Mark($"party: lobby close failed: {removed}");
+                        }
                     }
-                }
-                else
-                {
-                    var left = await _online.Lobbies.LeaveLobbyAsync(_lobbyId).ConfigureAwait(false);
-                    if (left.Failed)
+                    else
                     {
-                        CrashLog.Mark($"party: lobby leave failed: {left}");
+                        var left = await _online.Lobbies.LeaveLobbyAsync(lobbyId).ConfigureAwait(false);
+                        if (left.Failed)
+                        {
+                            CrashLog.Mark($"party: lobby leave failed: {left}");
+                        }
                     }
                 }
             }
-
-            DisposeParty();
-            ResetSessionState();
+            finally
+            {
+                CleanupSession(revision);
+            }
         }
     }
 
     public void Send(int peerId, ReadOnlySpan<byte> payload, MessageDelivery delivery)
     {
-        if (!HasNetwork || payload.IsEmpty || _localEndpoint is null)
+        lock (_stateGate)
         {
-            return;
-        }
+            if (!HasNetwork || payload.IsEmpty || _localEndpoint is null)
+            {
+                return;
+            }
 
-        try
-        {
-            _localEndpoint.SendMessage(TargetsFor(peerId), payload.ToArray(), OptionsFor(delivery), QueueFor(delivery));
-        }
-        catch (Exception ex) when (IsPlatformException(ex))
-        {
-            // Swallowed as before - a dropped message must not take the match down - but
-            // no longer silently. Keyed on the message so a send that fails thirty times
-            // a second leaves one line rather than flooding the log.
-            CrashLog.MarkOnce("send:" + ex.Message, $"party: send failed ({delivery}): {ex.Message}");
+            try
+            {
+                _localEndpoint.SendMessage(TargetsFor(peerId), payload.ToArray(), OptionsFor(delivery), QueueFor(delivery));
+            }
+            catch (Exception ex) when (IsPlatformException(ex))
+            {
+                // Swallowed as before - a dropped message must not take the match down - but
+                // no longer silently. Keyed on the message so a send that fails thirty times
+                // a second leaves one line rather than flooding the log.
+                CrashLog.MarkOnce("send:" + ex.Message, $"party: send failed ({delivery}): {ex.Message}");
+            }
         }
     }
 
     /// <summary>Drains Party changes from the runtime's single per-frame pump.</summary>
     internal void Pump()
     {
-        CompleteCanceledRegions();
-        CompleteCanceledOperations();
-
-        if (_party is null)
+        Action[] completions = [];
+        try
         {
-            return;
-        }
-
-        foreach (PartyStateChange change in _party.ProcessStateChanges())
-        {
-            switch (change)
+            lock (_stateGate)
             {
-                case PartyRegionsChanged regions:
-                    CompleteRegions(regions.Regions);
-                    CompleteOperation(regions);
-                    break;
-                case PartyOperationCompleted operation:
-                    Observe(operation);
-                    CompleteOperation(operation);
-                    break;
-                case PartyEndpointCreated created:
-                    ObserveEndpointCreated(created.Endpoint);
-                    break;
-                case PartyEndpointDestroyed destroyed:
-                    ObserveEndpointDestroyed(destroyed.Endpoint);
-                    break;
-                case PartyEndpointMessageReceived received:
-                    OnMessageReceived(received.SenderEndpoint, received.Message);
-                    break;
-                case PartyChatControlCreated created:
-                    ObserveChatControl(created.ChatControl);
-                    break;
-                case PartyChatControlDestroyed destroyed:
-                    ForgetChatControl(destroyed.ChatControl);
-                    ChatChanged?.Invoke();
-                    break;
-                case PartyChatTextReceived text:
-                    OnChatTextReceived(text);
-                    break;
-                case PartyVoiceChatTranscriptionReceived transcription:
-                    OnTranscriptionReceived(transcription);
-                    break;
-                case PartyChatControlPropertiesChanged:
-                case PartyLocalChatAudioInputChanged:
-                case PartyLocalChatAudioOutputChanged:
-                    ChatChanged?.Invoke();
-                    break;
-                case PartyNetworkDestroyed destroyed:
-                    OnNetworkDestroyed(destroyed);
-                    break;
+                if (_pumping)
+                {
+                    return;
+                }
+
+                _pumping = true;
+                try
+                {
+                    CompleteCanceledRegions();
+                    CompleteCanceledOperations();
+
+                    if (_party is not null && !_disposeAfterPump)
+                    {
+                        var revision = _sessionRevision;
+                        foreach (PartyStateChange change in _party.ProcessStateChanges())
+                        {
+                            switch (change)
+                            {
+                                case PartyRegionsChanged regions:
+                                    CompleteRegions(regions.Regions);
+                                    CompleteOperation(regions);
+                                    break;
+                                case PartyOperationCompleted operation:
+                                    Observe(operation);
+                                    CompleteOperation(operation);
+                                    break;
+                                case PartyEndpointCreated created:
+                                    ObserveEndpointCreated(created.Endpoint);
+                                    break;
+                                case PartyEndpointDestroyed destroyed:
+                                    ObserveEndpointDestroyed(destroyed.Endpoint);
+                                    break;
+                                case PartyEndpointMessageReceived received:
+                                    OnMessageReceived(received.SenderEndpoint, received.Message);
+                                    break;
+                                case PartyChatControlCreated created:
+                                    ObserveChatControl(created.ChatControl);
+                                    break;
+                                case PartyChatControlDestroyed destroyed:
+                                    ForgetChatControl(destroyed.ChatControl);
+                                    ChatChanged?.Invoke();
+                                    break;
+                                case PartyChatTextReceived text:
+                                    OnChatTextReceived(text);
+                                    break;
+                                case PartyVoiceChatTranscriptionReceived transcription:
+                                    OnTranscriptionReceived(transcription);
+                                    break;
+                                case PartyChatControlPropertiesChanged:
+                                case PartyLocalChatAudioInputChanged:
+                                case PartyLocalChatAudioOutputChanged:
+                                    ChatChanged?.Invoke();
+                                    break;
+                                case PartyNetworkDestroyed destroyed:
+                                    OnNetworkDestroyed(destroyed);
+                                    break;
+                            }
+
+                            if (revision != _sessionRevision)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    _pumping = false;
+                    completions = _afterPump.ToArray();
+                    _afterPump.Clear();
+                    if (_disposeAfterPump)
+                    {
+                        _disposeAfterPump = false;
+                        DisposeParty();
+                    }
+                }
+            }
+        }
+        finally
+        {
+            foreach (var completion in completions)
+            {
+                completion();
             }
         }
     }
 
     public void SetPeerRestrictions(int peerId, bool allowVoice, bool allowText)
     {
-        _restrictions[peerId] = new ChatRestriction(allowVoice, allowText);
-        ApplyChatPolicy(peerId);
-        ChatChanged?.Invoke();
-    }
-
-    public void SetPeerMuted(int peerId, bool muted)
-    {
-        var changed = muted ? _mutedPeers.Add(peerId) : _mutedPeers.Remove(peerId);
-        if (changed)
+        lock (_stateGate)
         {
+            _restrictions[peerId] = new ChatRestriction(allowVoice, allowText);
             ApplyChatPolicy(peerId);
             ChatChanged?.Invoke();
         }
     }
 
-    public bool IsPeerMuted(int peerId) => _mutedPeers.Contains(peerId);
+    public void SetPeerMuted(int peerId, bool muted)
+    {
+        lock (_stateGate)
+        {
+            var changed = muted ? _mutedPeers.Add(peerId) : _mutedPeers.Remove(peerId);
+            if (changed)
+            {
+                ApplyChatPolicy(peerId);
+                ChatChanged?.Invoke();
+            }
+        }
+    }
+
+    public bool IsPeerMuted(int peerId)
+    {
+        lock (_stateGate)
+        {
+            return _mutedPeers.Contains(peerId);
+        }
+    }
 
     public ChatIndicator GetChatIndicator(int peerId)
     {
-        if (!HasNetwork || !ChatAllowed)
+        lock (_stateGate)
         {
-            return ChatIndicator.None;
-        }
-
-        if (peerId == LocalPeerId)
-        {
-            return IsSelfMuted ? ChatIndicator.Muted : LocalIndicator();
-        }
-
-        if (IsPeerMuted(peerId)
-            || (_restrictions.TryGetValue(peerId, out var restriction) && !restriction.AllowVoice))
-        {
-            return ChatIndicator.Muted;
-        }
-
-        if (_localChat is null || !TryGetChat(peerId, out var remote))
-        {
-            return ChatIndicator.None;
-        }
-
-        try
-        {
-            return _localChat.GetChatIndicator(remote) switch
+            if (!HasNetwork || !ChatAllowed)
             {
-                PartyChatControlChatIndicator.Talking => ChatIndicator.Talking,
-                PartyChatControlChatIndicator.IncomingVoiceDisabled => ChatIndicator.Muted,
-                PartyChatControlChatIndicator.IncomingCommunicationsMuted => ChatIndicator.Muted,
-                PartyChatControlChatIndicator.RemoteAudioInputMuted => ChatIndicator.Muted,
-                PartyChatControlChatIndicator.NoRemoteInput => ChatIndicator.None,
-                _ => ChatIndicator.Available,
-            };
-        }
-        catch (Exception ex) when (IsPlatformException(ex))
-        {
-            return ChatIndicator.None;
+                return ChatIndicator.None;
+            }
+
+            if (peerId == LocalPeerId)
+            {
+                return IsSelfMuted ? ChatIndicator.Muted : LocalIndicator();
+            }
+
+            if (IsPeerMuted(peerId)
+                || (_restrictions.TryGetValue(peerId, out var restriction) && !restriction.AllowVoice))
+            {
+                return ChatIndicator.Muted;
+            }
+
+            if (_localChat is null || !TryGetChat(peerId, out var remote))
+            {
+                return ChatIndicator.None;
+            }
+
+            try
+            {
+                return _localChat.GetChatIndicator(remote) switch
+                {
+                    PartyChatControlChatIndicator.Talking => ChatIndicator.Talking,
+                    PartyChatControlChatIndicator.IncomingVoiceDisabled => ChatIndicator.Muted,
+                    PartyChatControlChatIndicator.IncomingCommunicationsMuted => ChatIndicator.Muted,
+                    PartyChatControlChatIndicator.RemoteAudioInputMuted => ChatIndicator.Muted,
+                    PartyChatControlChatIndicator.NoRemoteInput => ChatIndicator.None,
+                    _ => ChatIndicator.Available,
+                };
+            }
+            catch (Exception ex) when (IsPlatformException(ex))
+            {
+                return ChatIndicator.None;
+            }
         }
     }
 
     public void ClearChatRestrictions()
     {
-        _mutedPeers.Clear();
-        _restrictions.Clear();
-        ApplyChatPolicy();
-        ChatChanged?.Invoke();
+        lock (_stateGate)
+        {
+            _mutedPeers.Clear();
+            _restrictions.Clear();
+            ApplyChatPolicy();
+            ChatChanged?.Invoke();
+        }
     }
 
     public PlatformResult SendChatText(string message)
     {
-        if (string.IsNullOrWhiteSpace(message))
+        lock (_stateGate)
         {
-            return PlatformResult.Fail(PlatformStatus.Failed, "There is nothing to send.");
-        }
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return PlatformResult.Fail(PlatformStatus.Failed, "There is nothing to send.");
+            }
 
-        if (!ChatAllowed)
-        {
-            return PlatformResult.Fail(PlatformStatus.NoPrivilege, "Your account settings do not allow chat.");
-        }
+            if (!ChatAllowed)
+            {
+                return PlatformResult.Fail(PlatformStatus.NoPrivilege, "Your account settings do not allow chat.");
+            }
 
-        if (!HasNetwork || _localChat is null)
-        {
-            return PlatformResult.Fail(PlatformStatus.Failed, "You are not in a match.");
-        }
+            if (!HasNetwork || _localChat is null)
+            {
+                return PlatformResult.Fail(PlatformStatus.Failed, "You are not in a match.");
+            }
 
-        if (IsSelfMuted)
-        {
-            return PlatformResult.Fail(PlatformStatus.Failed, "You are muted.");
-        }
+            if (IsSelfMuted)
+            {
+                return PlatformResult.Fail(PlatformStatus.Failed, "You are muted.");
+            }
 
-        var trimmed = message.Length > MaxChatChars ? message[..MaxChatChars] : message;
-        try
-        {
-            var data = new byte[4];
-            BinaryPrimitives.WriteInt32LittleEndian(data, LocalPeerId);
-            _localChat.SendText(Array.Empty<PartyChatControl>(), trimmed, data);
-            ChatTextReceived?.Invoke(LocalPeerId, trimmed, ChatTextKind.Typed);
-            return PlatformResult.Ok();
-        }
-        catch (Exception ex) when (IsPlatformException(ex))
-        {
-            return PlatformResult.Fail(PlatformStatus.Failed, "That chat message could not be sent.", ex.Message);
+            var trimmed = message.Length > MaxChatChars ? message[..MaxChatChars] : message;
+            try
+            {
+                var data = new byte[4];
+                BinaryPrimitives.WriteInt32LittleEndian(data, LocalPeerId);
+                _localChat.SendText(Array.Empty<PartyChatControl>(), trimmed, data);
+                ChatTextReceived?.Invoke(LocalPeerId, trimmed, ChatTextKind.Typed);
+                return PlatformResult.Ok();
+            }
+            catch (Exception ex) when (IsPlatformException(ex))
+            {
+                return PlatformResult.Fail(PlatformStatus.Failed, "That chat message could not be sent.", ex.Message);
+            }
         }
     }
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_stateGate)
         {
-            return;
-        }
+            if (_disposed)
+            {
+                return;
+            }
 
-        _disposed = true;
-        if (_online is not null)
-        {
-            _online.Lobbies.ConnectionLost -= OnLobbyConnectionLost;
+            _disposed = true;
+            if (_online is not null)
+            {
+                _online.Lobbies.ConnectionLost -= OnLobbyConnectionLost;
+            }
+            CleanupSession();
         }
-        DisposeParty();
-        ResetSessionState();
     }
 
     private async Task<PlatformResult> JoinPartyNetworkAsync(
@@ -790,11 +877,14 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             // XR-014: the host arrives as a token rather than an entity id, so there is
             // nothing to seed the entity map with. The host's entity is learned from its
             // own authenticated endpoint and matched against the token; see IsHostEntity.
-            _hostToken = hostToken;
-            _hostEntityId = string.Empty;
-            IsHost = false;
-            EnsureParty();
-            EnsurePartyUser();
+            lock (_stateGate)
+            {
+                EnsureParty();
+                EnsurePartyUser();
+                _hostToken = hostToken;
+                _hostEntityId = string.Empty;
+                IsHost = false;
+            }
 
             var connected = await ConnectAuthenticateEndpointAndChatAsync(descriptor, invitation, cancellationToken)
                 .ConfigureAwait(false);
@@ -804,9 +894,15 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 return connected;
             }
 
-            _peerAssignment = new TaskCompletionSource<int>();
-            SendControlHello();
-            var assigned = await AwaitPeerAssignmentAsync(cancellationToken).ConfigureAwait(false);
+            Task<int> assignment;
+            lock (_stateGate)
+            {
+                ThrowIfSessionEnded();
+                _peerAssignment = new TaskCompletionSource<int>();
+                SendControlHello();
+                assignment = AwaitPeerAssignmentAsync(cancellationToken);
+            }
+            var assigned = await assignment.ConfigureAwait(false);
             if (assigned <= IPartyService.HostPeerId)
             {
                 await LeaveAsync().ConfigureAwait(false);
@@ -814,12 +910,16 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                     $"Assigned peer id {assigned}.");
             }
 
-            HasNetwork = true;
-            LocalPeerId = assigned;
-            ConnectionString = EncodeInvite(descriptor, invitation, _hostToken, protocolVersion);
-            if (_peerToEndpoint.ContainsKey(IPartyService.HostPeerId))
+            lock (_stateGate)
             {
-                PeerJoined?.Invoke(IPartyService.HostPeerId);
+                ThrowIfSessionEnded();
+                HasNetwork = true;
+                LocalPeerId = assigned;
+                ConnectionString = EncodeInvite(descriptor, invitation, _hostToken, protocolVersion);
+                if (_peerToEndpoint.ContainsKey(IPartyService.HostPeerId))
+                {
+                    PeerJoined?.Invoke(IPartyService.HostPeerId);
+                }
             }
 
             return PlatformResult.Ok();
@@ -841,24 +941,35 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         string? invitation,
         CancellationToken cancellationToken)
     {
-        (PartyOperationId connect, PartyNetwork network) =
-            _party!.ConnectToNetwork(PartyNetworkDescriptor.Deserialize(descriptor));
-        _network = network;
+        Task<PartyConnectToNetworkCompleted> connection;
+        PartyOperationId authenticate;
+        lock (_stateGate)
+        {
+            ThrowIfSessionEnded();
+            (PartyOperationId connect, PartyNetwork network) =
+                _party!.ConnectToNetwork(PartyNetworkDescriptor.Deserialize(descriptor));
+            _network = network;
 
-        PartyOperationId authenticate = network.AuthenticateLocalUser(
-            _partyUser!, string.IsNullOrEmpty(invitation) ? null : invitation);
+            authenticate = network.AuthenticateLocalUser(
+                _partyUser!, string.IsNullOrEmpty(invitation) ? null : invitation);
+            connection = AwaitOperationAsync<PartyConnectToNetworkCompleted>(connect, cancellationToken);
+        }
 
-        var connected = await AwaitOperationAsync<PartyConnectToNetworkCompleted>(connect, cancellationToken)
-            .ConfigureAwait(false);
+        var connected = await connection.ConfigureAwait(false);
         if (!connected.Succeeded || connected.Network is null)
         {
             return PlatformResult.Fail(MapPartyStatus(connected.Result),
                 PlayerMessage("Could not connect to the online match.", connected.Result), Describe(connected));
         }
 
-        _network = connected.Network;
-        var authenticated = await AwaitOperationAsync<PartyAuthenticateLocalUserCompleted>(
-            authenticate, cancellationToken).ConfigureAwait(false);
+        Task<PartyAuthenticateLocalUserCompleted> authentication;
+        lock (_stateGate)
+        {
+            ThrowIfSessionEnded();
+            _network = connected.Network;
+            authentication = AwaitOperationAsync<PartyAuthenticateLocalUserCompleted>(authenticate, cancellationToken);
+        }
+        var authenticated = await authentication.ConfigureAwait(false);
         if (!authenticated.Succeeded)
         {
             return PlatformResult.Fail(MapPartyStatus(authenticated.Result),
@@ -866,8 +977,14 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 Describe(authenticated));
         }
 
-        var endpoint = await AwaitOperationAsync<PartyCreateEndpointCompleted>(
-            _network.CreateEndpoint(_partyUser), cancellationToken).ConfigureAwait(false);
+        Task<PartyCreateEndpointCompleted> endpointCreation;
+        lock (_stateGate)
+        {
+            ThrowIfSessionEnded();
+            endpointCreation = AwaitOperationAsync<PartyCreateEndpointCompleted>(
+                _network!.CreateEndpoint(_partyUser), cancellationToken);
+        }
+        var endpoint = await endpointCreation.ConfigureAwait(false);
         if (!endpoint.Succeeded || endpoint.Endpoint is null)
         {
             return PlatformResult.Fail(MapPartyStatus(endpoint.Result),
@@ -875,54 +992,87 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 Describe(endpoint));
         }
 
-        _localEndpoint = endpoint.Endpoint;
-
-        var chat = await AwaitOperationAsync<PartyCreateChatControlCompleted>(
-            _party.LocalDevice.CreateChatControl(_partyUser!, LanguageCode), cancellationToken)
-            .ConfigureAwait(false);
+        Task<PartyCreateChatControlCompleted> chatCreation;
+        lock (_stateGate)
+        {
+            ThrowIfSessionEnded();
+            _localEndpoint = endpoint.Endpoint;
+            chatCreation = AwaitOperationAsync<PartyCreateChatControlCompleted>(
+                _party!.LocalDevice.CreateChatControl(_partyUser!, LanguageCode), cancellationToken);
+        }
+        var chat = await chatCreation.ConfigureAwait(false);
         if (chat.Succeeded && chat.ChatControl is not null)
         {
-            _localChat = chat.ChatControl;
-            ApplyLocalMute();
+            Task chatConnection;
+            lock (_stateGate)
+            {
+                ThrowIfSessionEnded();
+                _localChat = chat.ChatControl;
+                ApplyLocalMute();
 
-            // PlatformUserDefault requires the non-null, non-empty platform user context
-            // (the Xbox user's XUID) to resolve "this user's" default device; passing none
-            // fails both calls with PartyError "no platform user was specified".
-            var xuid = _identity.CurrentUser?.XboxUserId;
-            _ = _localChat.SetAudioInput(PartyAudioDeviceSelectionType.PlatformUserDefault, xuid);
-            _ = _localChat.SetAudioOutput(PartyAudioDeviceSelectionType.PlatformUserDefault, xuid);
-            await TryAwait(_network.ConnectChatControl(_localChat), cancellationToken).ConfigureAwait(false);
-            ApplyChatPolicy();
+                // PlatformUserDefault requires the non-null, non-empty platform user context
+                // (the Xbox user's XUID) to resolve "this user's" default device; passing none
+                // fails both calls with PartyError "no platform user was specified".
+                var xuid = _identity.CurrentUser?.XboxUserId;
+                _ = _localChat.SetAudioInput(PartyAudioDeviceSelectionType.PlatformUserDefault, xuid);
+                _ = _localChat.SetAudioOutput(PartyAudioDeviceSelectionType.PlatformUserDefault, xuid);
+                chatConnection = TryAwait(_network!.ConnectChatControl(_localChat), cancellationToken);
+            }
+            await chatConnection.ConfigureAwait(false);
+            lock (_stateGate)
+            {
+                ThrowIfSessionEnded();
+                ApplyChatPolicy();
+            }
         }
 
         return PlatformResult.Ok();
     }
 
+    private void ThrowIfSessionEnded()
+    {
+        if (_disposed || _disposeAfterPump || _leaving || _party is null || _partyUser is null)
+        {
+            throw new OperationCanceledException("The Party session ended.");
+        }
+    }
+
     private void EnsureParty()
     {
-        if (_party is not null)
+        lock (_stateGate)
         {
-            return;
+            if (_disposed || _disposeAfterPump || _leaving)
+            {
+                throw new InvalidOperationException("The previous Party session is still closing.");
+            }
+            if (_party is not null)
+            {
+                return;
+            }
+
+            PartyManager.SetLocalUdpSocketBindAddress(new PartyLocalUdpSocketBindAddressConfiguration
+            {
+                Options = PartyLocalUdpSocketBindAddressOptions.ExcludeGameCorePreferredUdpMultiplayerPort,
+                Port = 0,
+            });
+
+            _party = PartyManager.Initialize(_configuration!.TitleId);
         }
-
-        PartyManager.SetLocalUdpSocketBindAddress(new PartyLocalUdpSocketBindAddressConfiguration
-        {
-            Options = PartyLocalUdpSocketBindAddressOptions.ExcludeGameCorePreferredUdpMultiplayerPort,
-            Port = 0,
-        });
-
-        _party = PartyManager.Initialize(_configuration!.TitleId);
     }
 
     private void EnsurePartyUser()
     {
-        if (_partyUser is not null)
+        lock (_stateGate)
         {
-            return;
+            EnsureParty();
+            if (_partyUser is not null)
+            {
+                return;
+            }
+            using var lease = _online!.AcquireEntity()
+                ?? throw new InvalidOperationException("The PlayFab user has signed out.");
+            _partyUser = _party!.CreateLocalUser(lease.Entity);
         }
-        using var lease = _online!.AcquireEntity()
-            ?? throw new InvalidOperationException("The PlayFab user has signed out.");
-        _partyUser = _party!.CreateLocalUser(lease.Entity);
     }
 
     private PlatformResult EnsureAvailable()
@@ -1019,35 +1169,61 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     private Task<IReadOnlyList<PartyRegion>> AwaitRegionsAsync(CancellationToken cancellationToken)
     {
-        var regions = _party!.GetRegions();
-        if (regions.Count > 0)
+        lock (_stateGate)
         {
-            return Task.FromResult(regions);
-        }
+            ThrowIfSessionEnded();
+            var regions = _party!.GetRegions();
+            if (regions.Count > 0)
+            {
+                return Task.FromResult(regions);
+            }
 
-        var pending = new PendingRegions(cancellationToken);
-        _pendingRegions.Add(pending);
-        return pending.Completion.Task;
+            var pending = new PendingRegions(cancellationToken);
+            _pendingRegions.Add(pending);
+            return pending.Completion.Task;
+        }
     }
 
     private async Task<T> AwaitOperationAsync<T>(PartyOperationId operation, CancellationToken cancellationToken)
         where T : PartyOperationCompleted
     {
-        var pending = new PendingOperation(typeof(T), cancellationToken);
-        _pendingOperations[operation] = pending;
+        PendingOperation pending;
+        lock (_stateGate)
+        {
+            pending = new PendingOperation(typeof(T), cancellationToken);
+            _pendingOperations[operation] = pending;
+        }
         return (T)await pending.Completion.Task.ConfigureAwait(false);
     }
 
     private Task<int> AwaitPeerAssignmentAsync(CancellationToken cancellationToken)
     {
-        if (LocalPeerId > IPartyService.HostPeerId)
+        lock (_stateGate)
         {
-            return Task.FromResult(LocalPeerId);
-        }
+            if (LocalPeerId > IPartyService.HostPeerId)
+            {
+                return Task.FromResult(LocalPeerId);
+            }
 
-        var assignment = _peerAssignment ??= new TaskCompletionSource<int>();
-        _peerAssignmentCancellation = cancellationToken;
-        return assignment.Task;
+            var assignment = _peerAssignment ??= new TaskCompletionSource<int>();
+            _peerAssignmentCancellation = cancellationToken;
+            return assignment.Task;
+        }
+    }
+
+    private Task TryTeardownAsync(
+        Func<PartyOperationId?> start, int revision, CancellationToken cancellationToken)
+    {
+        lock (_stateGate)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (revision != _sessionRevision)
+            {
+                return Task.CompletedTask;
+            }
+            var operation = start();
+            return operation is { } id ? TryAwait(id, cancellationToken) : Task.CompletedTask;
+        }
     }
 
     private async Task TryAwait(PartyOperationId operation, CancellationToken cancellationToken = default)
@@ -1112,8 +1288,10 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
         foreach (var pending in _pendingRegions.ToArray())
         {
-            _pendingRegions.Remove(pending);
-            pending.Completion.TrySetResult(regions);
+            if (_pendingRegions.Remove(pending))
+            {
+                pending.Completion.TrySetResult(regions);
+            }
         }
     }
 
@@ -1121,9 +1299,8 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
     {
         foreach (var pending in _pendingRegions.ToArray())
         {
-            if (pending.CancellationToken.IsCancellationRequested)
+            if (pending.CancellationToken.IsCancellationRequested && _pendingRegions.Remove(pending))
             {
-                _pendingRegions.Remove(pending);
                 pending.Completion.TrySetCanceled(pending.CancellationToken);
             }
         }
@@ -1693,16 +1870,19 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         {
             var verified = await _moderation!.VerifyTextAsync(chatText).ConfigureAwait(false);
 
-            // Re-checked after the round trip: the peer can have been muted, restricted
-            // or disconnected, or chat revoked entirely, while it was in flight.
-            if (verified.Failed || verified.Value is null || _disposed || !ChatAllowed
-                || IsPeerMuted(peerId)
-                || (_restrictions.TryGetValue(peerId, out var restriction) && !restriction.AllowText))
+            lock (_stateGate)
             {
-                return;
-            }
+                // Re-checked after the round trip: the peer can have been muted, restricted
+                // or disconnected, or chat revoked entirely, while it was in flight.
+                if (verified.Failed || verified.Value is null || _disposed || !ChatAllowed
+                    || IsPeerMuted(peerId)
+                    || (_restrictions.TryGetValue(peerId, out var restriction) && !restriction.AllowText))
+                {
+                    return;
+                }
 
-            ChatTextReceived?.Invoke(peerId, verified.Value, kind);
+                ChatTextReceived?.Invoke(peerId, verified.Value, kind);
+            }
         }
         catch (Exception ex) when (IsPlatformException(ex) || ex is OperationCanceledException)
         {
@@ -1717,20 +1897,22 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     private void OnLobbyConnectionLost(PlatformResult failure)
     {
-        if (_disposed || _leaving || (!HasNetwork && _party is null))
+        lock (_stateGate)
         {
-            return;
-        }
+            if (_disposed || _leaving || (!HasNetwork && _party is null))
+            {
+                return;
+            }
 
-        var peers = _peerToEndpoint.Keys.Where(id => id != LocalPeerId).ToArray();
-        _online?.Lobbies.Reset();
-        DisposeParty();
-        ResetSessionState();
-        foreach (var peerId in peers)
-        {
-            PeerLeft?.Invoke(peerId);
+            var peers = _peerToEndpoint.Keys.Where(id => id != LocalPeerId).ToArray();
+            _online?.Lobbies.Reset();
+            CleanupSession();
+            foreach (var peerId in peers)
+            {
+                PeerLeft?.Invoke(peerId);
+            }
+            NetworkDestroyed?.Invoke(failure);
         }
-        NetworkDestroyed?.Invoke(failure);
     }
 
     private void OnNetworkDestroyed(PartyNetworkDestroyed destroyed)
@@ -1753,45 +1935,81 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     private void ResetSessionState()
     {
-        var assignment = _peerAssignment;
-        var operations = _pendingOperations.Values.ToArray();
-        var regions = _pendingRegions.ToArray();
-        HasNetwork = false;
-        IsHost = false;
-        LocalPeerId = 0;
-        ConnectionString = string.Empty;
-        JoinCode = string.Empty;
-        _lobbyId = string.Empty;
-        _hostEntityId = string.Empty;
-        _hostToken = string.Empty;
-        _nextPeerId = IPartyService.HostPeerId + 1;
-        _network = null;
-        _localEndpoint = null;
-        _localChat = null;
-        _partyUser = null;
-        _peerAssignment = null;
-        _peerAssignmentCancellation = default;
-        _leaving = false;
-        _pendingOperations.Clear();
-        _pendingRegions.Clear();
-        _endpointToPeer.Clear();
-        _peerToEndpoint.Clear();
-        _entityToPeer.Clear();
-        _mutedPeers.Clear();
-        _restrictions.Clear();
-        assignment?.TrySetCanceled();
-        foreach (var pending in operations)
+        lock (_stateGate)
         {
-            pending.Completion.TrySetCanceled();
+            var assignment = _peerAssignment;
+            var operations = _pendingOperations.Values.ToArray();
+            var regions = _pendingRegions.ToArray();
+            _sessionRevision++;
+            HasNetwork = false;
+            IsHost = false;
+            LocalPeerId = 0;
+            ConnectionString = string.Empty;
+            JoinCode = string.Empty;
+            _lobbyId = string.Empty;
+            _hostEntityId = string.Empty;
+            _hostToken = string.Empty;
+            _nextPeerId = IPartyService.HostPeerId + 1;
+            _network = null;
+            _localEndpoint = null;
+            _localChat = null;
+            _partyUser = null;
+            _peerAssignment = null;
+            _peerAssignmentCancellation = default;
+            _leaving = false;
+            _pendingOperations.Clear();
+            _pendingRegions.Clear();
+            _endpointToPeer.Clear();
+            _peerToEndpoint.Clear();
+            _entityToPeer.Clear();
+            _mutedPeers.Clear();
+            _restrictions.Clear();
+            void CompleteDetachedWaits()
+            {
+                assignment?.TrySetCanceled();
+                foreach (var pending in operations)
+                {
+                    pending.Completion.TrySetCanceled();
+                }
+                foreach (var pending in regions)
+                {
+                    pending.Completion.TrySetCanceled();
+                }
+            }
+
+            if (_pumping)
+            {
+                _afterPump.Enqueue(CompleteDetachedWaits);
+            }
+            else
+            {
+                CompleteDetachedWaits();
+            }
         }
-        foreach (var pending in regions)
+    }
+
+    private void CleanupSession(int? revision = null)
+    {
+        lock (_stateGate)
         {
-            pending.Completion.TrySetCanceled();
+            if (revision is not null && revision != _sessionRevision)
+            {
+                return;
+            }
+
+            DisposeParty();
+            ResetSessionState();
         }
     }
 
     private void DisposeParty()
     {
+        if (_pumping)
+        {
+            // Monitor locks are reentrant: a pump callback must not dispose its own enumerator's manager.
+            _disposeAfterPump = true;
+            return;
+        }
         try
         {
             _party?.Dispose();

@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace NetRumble.Platform.Offline;
+namespace NetRumble.Platform.GameCore.Services;
 
 /// <summary>
 /// Local-disk save storage. A real implementation, not a stub.
@@ -27,14 +27,9 @@ public partial class LocalFileGameSaveService : IGameSaveService
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This used to be a shared file per key directly under the save root, used whenever
-    /// <see cref="_currentUserId"/> could not resolve anyone - boot, and the whole of a
-    /// Continue Offline session. The pre-certification audit traced a real leak through
-    /// it: the boot-time achievement load read that shared bucket before anyone signed
-    /// in, and nothing discarded it afterwards, so the next account to sign in had a
-    /// stranger's progress merged underneath its own, reported to the service as its own
-    /// and flushed into its own bucket. Test 052-05 Correct User Association targets
-    /// exactly that.
+    /// Boot-time reads must not adopt a previous user's progress before sign-in.
+    /// Until an account exists, data stays in memory so it cannot be attributed to
+    /// another account later (XR-052).
     /// </para>
     /// <para>
     /// There is no file a save can belong to before an identity exists, so an unsigned
