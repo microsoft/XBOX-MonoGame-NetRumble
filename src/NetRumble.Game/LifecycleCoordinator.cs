@@ -255,9 +255,6 @@ public sealed class LifecycleCoordinator
         // platform took away, so they are started again from a known state.
         _context.Audio.PlayMusic();
 
-        // XR-055: a report that failed in the seconds before the suspend - or against a
-        // service that had already begun tearing down - is still owed. Nothing in the game
-        // has changed across the freeze, but the service's willingness to listen has.
         _context.Achievements.RetryPending();
 
         // XR-048: everything the title knows about the account was answered before the

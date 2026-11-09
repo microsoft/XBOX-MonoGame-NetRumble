@@ -106,12 +106,13 @@
            Text="NativeAOT-GDKX was not found at '$(NativeAotGdkxRoot)'. Run tools/Setup-Gdkx.ps1, or set NativeAotGdkxRoot. See docs/xbox-console-build.md." />
 
     <!--
-      Every managed assembly beside the game is a reference for the compiler; the game
-      assembly itself is the input. Globbing rather than listing them means adding a
-      provider assembly to the game does not silently drop it from the console build.
+      Resolved managed dependencies are references; the game assembly is the input.
+      Do not glob the output folder: it also contains native PlayFab/Party DLLs, which
+      are redistributables rather than ILCompiler metadata references.
     -->
     <ItemGroup>
-      <GdkxIlcReference Include="$(TargetDir)*.dll" Exclude="$(TargetPath);$(TargetDir)mgruntime.dll;$(TargetDir)*.Native.dll" />
+      <GdkxIlcReference Include="@(ReferenceCopyLocalPaths)"
+                        Condition="'%(ReferenceCopyLocalPaths.Extension)' == '.dll' AND '%(ReferenceCopyLocalPaths.AssetType)' != 'native'" />
     </ItemGroup>
     <PropertyGroup>
       <GdkxIlcReferences>@(GdkxIlcReference->'-r:&quot;%(FullPath)&quot;', ' ')</GdkxIlcReferences>

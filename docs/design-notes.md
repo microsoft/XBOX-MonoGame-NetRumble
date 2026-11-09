@@ -46,10 +46,57 @@ A capability flag means the whole path works end to end. The provider does not a
 
 ### Compose orthogonal services as layers
 
-PlayFab cloud save and lobby discovery are independent of both the transport and the
-platform runtime, so they compose over whichever provider is active. That is what makes
+PlayFab cloud save and lobby discovery are independent of the transport, so they compose
+over whichever provider is active. They use the native GDK runtime even in developer
+modes. That is what makes
 `--platform=lan --playfab-title=<id>` work without an enum value for every combination of
 transport and cloud tier.
+
+### Use one native PlayFab identity
+
+Xbox login uses `PlayFabLocalUser.LoginAsync` once. The resulting entity serves Party,
+Lobby and the typed `PlayerDataManagement` user-data wrappers. No second Xbox-token
+exchange, client session ticket, custom HTTP client or REST request DTO is needed.
+Custom-ID authentication uses the native Authentication wrapper and remains Debug-only.
+
+The service owns the native entity; cloud operations borrow duplicate handles so signing
+out cannot dispose the identity underneath an in-flight call. Shutdown cancels work and
+drains borrowers before the Gaming Runtime is released. Xbox replacement login first
+clears the previous identity and invalidates older sign-ins, even if the new login fails.
+Provider shutdown awaits native sign-ins and entity borrowers independently of the
+budget for pump-driven Party and Xbox Services teardown.
+
+Lobby uses connected native lobbies with owner migration disabled. Operations and result
+snapshots run on the frame pump; canceled create/join completions leave their lobbies
+rather than publishing stale matches. Entity tokens are renewed through GDK.Net and
+supplied to the Multiplayer manager. Hosts close discovery and membership before leaving,
+instead of calling the server-only delete API. Retryable token-refresh failures are logged
+and retried after ten seconds without disconnecting the match. Terminal refresh failures
+stop retries and report connection loss; native Lobby disconnections still report loss.
+Account changes retire Lobby operations across subsequent frame pumps, with a one-second
+cleanup deadline, rather than blocking a frame. New requests wait until the old manager
+is released. Only final shutdown actively drains completions while waiting. Lobby loss
+disposes Party and clears pending session work before notifying the game; expired
+sign-in also clears the shared PlayFab identity so another Host or Join can authenticate.
+
+The user-data payload format is unchanged: Base64 under the existing keys, with a
+750-byte limit. The GDK provider always uses XGameSaveFiles, through GDK.Net's
+`GameSaveFiles.GetFolderWithUiAsync`. It obtains the signed-in user's save folder on
+the first file operation; the GDK handles synchronization outside the title process.
+Each save key names a file directly in the SDK-provided directory.
+File operations are serialized, writes replace a temporary file atomically, and account
+changes cancel active work and reject queued work captured for the old account.
+Suspension invalidates the folder synchronously and cancels outstanding file operations.
+After resume, the next read or write reacquires the folder. There is no title-side
+synchronization coordinator, reconciliation callback, write barrier or connectivity
+retry queue. Public cloud tasks are marshalled through `PumpDispatcher`, but shutdown
+drains the underlying workers without awaiting pump-dependent public completions.
+The bounded exit flush keeps pumping runtime completions rather than waiting on a
+queue that has stopped.
+First-run local settings are seeded without a cloud push, so the initial pull cannot
+be preceded by a write of defaults.
+Shutdown waits for folder acquisition and file operations before releasing the runtime.
+See the [XGameSaveFiles overview](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/game-save/xgamesavefiles).
 
 ## Connectivity and lifecycle
 

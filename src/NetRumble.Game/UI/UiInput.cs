@@ -129,7 +129,7 @@ public sealed class UiInput
 
     /// <summary>Prompt text for readying in the lobby.</summary>
     public string ReadyPrompt
-        => IsGamePadConnected ? "Press {X} when you are set" : "Press Ready when you are set";
+        => IsGamePadConnected ? "Press {X} when you are set" : "Press Space when you are set";
 
     /// <summary>Footer controls for the lobby, matching the active device.</summary>
     public string LobbyHint(bool canToggleVoice, bool isMuted)
@@ -345,48 +345,51 @@ public sealed class UiInput
         }
     }
 
-    private bool IsHeld(MenuAction action) => action switch
+    private bool IsHeld(MenuAction action) => IsGamePadHeld(action) || action switch
     {
-        MenuAction.Up => _keys.IsKeyDown(Keys.Up)
-            || _pad.IsButtonDown(Buttons.DPadUp)
+        MenuAction.Up => _keys.IsKeyDown(Keys.Up),
+        MenuAction.Down => _keys.IsKeyDown(Keys.Down),
+        MenuAction.Left => _keys.IsKeyDown(Keys.Left),
+        MenuAction.Right => _keys.IsKeyDown(Keys.Right),
+        MenuAction.Accept => _keys.IsKeyDown(Keys.Enter) || _keys.IsKeyDown(Keys.Space),
+        MenuAction.Back or MenuAction.GameMenu => _keys.IsKeyDown(Keys.Escape),
+        MenuAction.PagePrevious => _keys.IsKeyDown(Keys.Q),
+        MenuAction.PageNext => _keys.IsKeyDown(Keys.E),
+        MenuAction.ToggleReady => _keys.IsKeyDown(Keys.Space),
+        MenuAction.VoiceChat => _keys.IsKeyDown(Keys.T),
+        _ => false,
+    };
+
+    /// <summary>True while the controller holds an action, independent of keyboard input.</summary>
+    public bool IsGamePadHeld(MenuAction action) => action switch
+    {
+        MenuAction.Up => _pad.IsButtonDown(Buttons.DPadUp)
             || _pad.ThumbSticks.Left.Y > StickDeadzone,
 
-        MenuAction.Down => _keys.IsKeyDown(Keys.Down)
-            || _pad.IsButtonDown(Buttons.DPadDown)
+        MenuAction.Down => _pad.IsButtonDown(Buttons.DPadDown)
             || _pad.ThumbSticks.Left.Y < -StickDeadzone,
 
-        MenuAction.Left => _keys.IsKeyDown(Keys.Left)
-            || _pad.IsButtonDown(Buttons.DPadLeft)
+        MenuAction.Left => _pad.IsButtonDown(Buttons.DPadLeft)
             || _pad.ThumbSticks.Left.X < -StickDeadzone,
 
-        MenuAction.Right => _keys.IsKeyDown(Keys.Right)
-            || _pad.IsButtonDown(Buttons.DPadRight)
+        MenuAction.Right => _pad.IsButtonDown(Buttons.DPadRight)
             || _pad.ThumbSticks.Left.X > StickDeadzone,
 
-        // ui_accept binds Enter, keypad Enter and Space as well as A.
-        MenuAction.Accept => _keys.IsKeyDown(Keys.Enter)
-            || _keys.IsKeyDown(Keys.Space)
-            || _pad.Buttons.A == ButtonState.Pressed,
+        MenuAction.Accept => _pad.Buttons.A == ButtonState.Pressed,
 
         // ui_back_action and ui_cancel share bindings in the project file.
-        MenuAction.Back => _keys.IsKeyDown(Keys.Escape)
-            || _pad.Buttons.B == ButtonState.Pressed,
+        MenuAction.Back => _pad.Buttons.B == ButtonState.Pressed,
 
         // prev3 / next3: the shoulder buttons that page the lobby's colour and ship strips.
-        MenuAction.PagePrevious => _keys.IsKeyDown(Keys.Q)
-            || _pad.Buttons.LeftShoulder == ButtonState.Pressed,
+        MenuAction.PagePrevious => _pad.Buttons.LeftShoulder == ButtonState.Pressed,
 
-        MenuAction.PageNext => _keys.IsKeyDown(Keys.E)
-            || _pad.Buttons.RightShoulder == ButtonState.Pressed,
+        MenuAction.PageNext => _pad.Buttons.RightShoulder == ButtonState.Pressed,
 
-        MenuAction.ToggleReady => _keys.IsKeyDown(Keys.Space)
-            || _pad.Buttons.X == ButtonState.Pressed,
+        MenuAction.ToggleReady => _pad.Buttons.X == ButtonState.Pressed,
 
-        MenuAction.GameMenu => _keys.IsKeyDown(Keys.Escape)
-            || _pad.Buttons.Start == ButtonState.Pressed,
+        MenuAction.GameMenu => _pad.Buttons.Start == ButtonState.Pressed,
 
-        MenuAction.VoiceChat => _keys.IsKeyDown(Keys.T)
-            || _pad.Buttons.Y == ButtonState.Pressed,
+        MenuAction.VoiceChat => _pad.Buttons.Y == ButtonState.Pressed,
 
         _ => false,
     };

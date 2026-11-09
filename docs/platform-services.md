@@ -10,7 +10,7 @@ explain the decisions behind it.
 
 | Integration | Source |
 |---|---|
-| GDK sign-in and the exchange for a PlayFab identity | `src/NetRumble.Platform.GameCore/Services/GameCoreIdentityService.cs`, `src/NetRumble.Platform.PlayFab/PlayFabAuthClient.cs` |
+| GDK sign-in and the exchange for a PlayFab identity | `src/NetRumble.Platform.GameCore/Services/GameCoreIdentityService.cs`, `src/NetRumble.Platform.PlayFab/PlayFabOnlineServices.cs` |
 | Sign-in progress screen and offline fallback | `src/NetRumble.Game/UI/Screens/AcquireUserScreen.cs` |
 | PlayFab Party as the match transport | `src/NetRumble.Platform.GameCore/Services/GameCorePartyService.cs`, `src/NetRumble.Core/Net/PartyMatchNetwork.cs` |
 | Join-code discovery with PlayFab Lobby | `src/NetRumble.Platform.PlayFab/PlayFabLobbyClient.cs` |
@@ -38,8 +38,8 @@ been proven by anyone without access to that title and its sandbox.
 | Service | Offline provider | GDK provider | Proven |
 |---|---|---|---|
 | `IPlatformRuntime` | Complete | Complete. Lifecycle events bound directly because XBOX GDK.NET wraps none of them. Device kind and a connectivity hint are read from the runtime. | Connectivity hint observed answering. Lifecycle callbacks need XBOX Series X\|S hardware. |
-| `IIdentityService` | Complete | XBOX sign-in complete. Account changes surface through `AccountChanged`, controller associations through `TracksControllerAssociations`, `HasAssociatedController` and `ControllerAssociationChanged`. PlayFab entity exchange and REST session-ticket exchange are wired. | Sign-in proven. Account-change and association events need XBOX Series X\|S hardware. |
-| `IGameSaveService` | Complete, local | Connected storage (`XGameSave`) by default, PlayFab user data behind `/p:NetRumbleCloudSave=PlayFab` | Local tier proven. Neither cloud tier has been round-tripped between two devices. |
+| `IIdentityService` | Complete | XBOX sign-in complete. Account changes surface through `AccountChanged`, controller associations through `TracksControllerAssociations`, `HasAssociatedController` and `ControllerAssociationChanged`. One native PlayFab login supplies the entity for Party and Lobby. | Xbox sign-in previously proven; the native PlayFab migration needs authenticated console verification. Account-change and association events need XBOX Series X\|S hardware. |
+| `IGameSaveService` | Complete, local | GDK.Net `GameSaveFiles.GetFolderWithUiAsync` and file I/O (`XGameSaveFiles`), independent of PlayFab configuration | Cached-folder file operations and account isolation checked locally. Cross-device roaming remains unverified. |
 | `IPrivilegeService` | Complete | Complete for the two privileges this title gates on, multiplayer and communications | Needs a signed-in account |
 | `IAchievementService` | Complete | Complete | No unlock round trip has been observed |
 | `IActivityService` | Complete | Activation, multiplayer activity and presence are wired and driven from the game | Join and invite flows proven between two XBOX Series X\|S consoles. Presence has not been seen on a real profile. |
@@ -49,6 +49,16 @@ been proven by anyone without access to that title and its sandbox.
 | `IGameInputService` | Unused | A null implementation in every provider. It reports no devices and raises no events. | Not applicable |
 | `IPlatformUiService` | Complete | Complete | Interactive calls unverified end to end |
 | `IPartyService` | Refuses | Party networking, Lobby join-code publishing, messaging and chat are wired | Transport proven over loopback and LAN. No run under real network conditions. |
+
+Run the native-independent save-file checks with
+`dotnet run --project tools\NetRumble.PlatformSpike -- --gamesave-files-checks-only`.
+They exercise temporary test folders, not the signed-in user's platform save folder.
+These checks also cover pump-delivered results, suspension cancellation and directory
+invalidation. The GDK owns synchronization outside the title process; the backend only
+acquires the per-user folder and performs file I/O.
+Run `dotnet run --project tools\NetRumble.GameSaveChecks -c Release` for the
+game-layer initial-load, first-run settings and stale-snapshot regressions. Neither suite
+requires native sign-in or initializes a graphics device.
 
 ### Why `IGameInputService` is a null implementation
 
