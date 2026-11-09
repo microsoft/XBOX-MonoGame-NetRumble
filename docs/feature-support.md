@@ -18,7 +18,7 @@ have only ever compiled.
 | XBOX friends, activity, invites, recent players | Yes | Yes | Unavailable, because there is no platform surface to carry a join string | Unavailable |
 | XBOX achievement reporting | Yes | Yes | Local counters only, no XBOX award | Local counters only |
 | Rich presence | Yes | Yes | Unavailable | Unavailable |
-| Roaming cloud save for settings and achievement stats | Connected storage (`XGameSave`) | Connected storage (`XGameSave`) | PlayFab user data with `--playfab-title=<id>` | Local file only |
+| Roaming cloud save for settings and achievement stats | Connected storage (`XGameSaveFiles`) | Connected storage (`XGameSaveFiles`) | PlayFab user data with `--playfab-title=<id>` | Local file only |
 | Match history and counters | Local, per user | Local, per user | Local | Local |
 | Connectivity gating before online play is offered | Platform hint when known | Platform hint when known | Not gated | Not offered |
 | Lifecycle and controller detection | Focus and device detection | Suspend, resume, constrain, association detection | Desktop behaviour | Depends on platform |
@@ -36,12 +36,17 @@ sample favours a low-latency demonstration over a queue that has to fill.
 
 ## Cloud save tiers
 
-The GDK provider saves to GDK connected storage (`XGameSave`), so settings, achievement
+The GDK provider saves to GDK connected storage (`XGameSaveFiles`), so settings, achievement
 stats and match history roam together and the platform resolves conflicts.
-
-The PlayFab user-data tier it replaced is still selectable with
-`/p:NetRumbleCloudSave=PlayFab`, and it is what the desktop provider uses when no GDK is
-present, because connected storage needs a GDK user handle.
+GDK.Net's `GameSaveFiles.GetFolderWithUiAsync` acquires the per-user folder before the
+first file operation. Each save is a file named by its key directly in that directory.
+Writes use temporary files and atomic replacement; account changes invalidate queued work.
+The GDK handles save synchronization outside the title process. The title only acquires
+the correct user's directory and reads or writes files; it has no synchronization
+callbacks, reconciliation barriers or connectivity retry queue. Account changes,
+suspension and resume invalidate the cached directory. The next file operation
+reacquires it before accessing files. Public cloud-operation completions are delivered
+through the runtime pump.
 
 Neither tier has been round-tripped between two devices. See
 [Known gaps](known-gaps.md#never-observed-end-to-end).

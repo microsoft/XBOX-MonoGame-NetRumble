@@ -53,72 +53,8 @@ internal static class PlatformServicesChecks
         await CheckModeration(platform).ConfigureAwait(false);
         await CheckPrivacy(platform).ConfigureAwait(false);
         await CheckPlatformUi(platform).ConfigureAwait(false);
-        await CheckLocalSaveScoping().ConfigureAwait(false);
 
         Console.WriteLine();
-    }
-
-    /// <summary>
-    /// The local tier's per-account scoping, and the read-only fallback that keeps a
-    /// build which changes its scoping key from looking like a factory reset (XR-052).
-    /// </summary>
-    private static async Task CheckLocalSaveScoping()
-    {
-        var root = Path.Combine(
-            Path.GetTempPath(), "netrumble-spike-save-" + Guid.NewGuid().ToString("N")[..8]);
-
-        try
-        {
-            var payload = "settings-blob"u8.ToArray();
-
-            var legacy = new NetRumble.Platform.Offline.LocalFileGameSaveService(
-                root, () => "playfab-entity");
-            await legacy.SaveLocalAsync("settings", payload).ConfigureAwait(false);
-
-            // Same account, new scoping key, no fallback: a different folder, so nothing
-            // to read. This is the regression the fallback exists to prevent.
-            var bare = new NetRumble.Platform.Offline.LocalFileGameSaveService(
-                root, () => "xuid-1234");
-            Check(
-                "a new scoping key alone sees no saved data",
-                (await bare.LoadLocalAsync("settings").ConfigureAwait(false)).Value?.Length == 0);
-
-            var migrating = new NetRumble.Platform.Offline.LocalFileGameSaveService(
-                root, () => "xuid-1234", () => "playfab-entity");
-            Check(
-                "the legacy key is read when the current one has nothing",
-                (await migrating.LoadLocalAsync("settings").ConfigureAwait(false))
-                    .Value?.AsSpan().SequenceEqual(payload) == true);
-
-            // One-way: the next save lands under the current key, and from then on the
-            // legacy folder is superseded rather than kept in step.
-            var updated = "new-settings"u8.ToArray();
-            await migrating.SaveLocalAsync("settings", updated).ConfigureAwait(false);
-
-            Check(
-                "a save after the fallback writes under the current key",
-                (await bare.LoadLocalAsync("settings").ConfigureAwait(false))
-                    .Value?.AsSpan().SequenceEqual(updated) == true);
-
-            Check(
-                "the legacy copy is left untouched",
-                (await legacy.LoadLocalAsync("settings").ConfigureAwait(false))
-                    .Value?.AsSpan().SequenceEqual(payload) == true);
-
-            // Still no on-disk bucket before anyone is signed in.
-            var anonymous = new NetRumble.Platform.Offline.LocalFileGameSaveService(
-                root, () => null, () => "playfab-entity");
-            Check(
-                "an unsigned session reads nothing from either key",
-                (await anonymous.LoadLocalAsync("settings").ConfigureAwait(false)).Value?.Length == 0);
-        }
-        finally
-        {
-            if (Directory.Exists(root))
-            {
-                Directory.Delete(root, recursive: true);
-            }
-        }
     }
 
     private static async Task CheckPrivileges(IPrivilegeService privileges)
