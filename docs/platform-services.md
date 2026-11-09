@@ -93,6 +93,9 @@ not inside it. Cleanup outside a pump completes directly without requiring anoth
 frame. Every reset retires its old native manager, including a host-closing reset
 that cancels an already pending leave. Session revisions prevent an older leave
 from tearing down a newer session.
+Host/join attempts retain their original revision through native continuations
+and failure/cancellation cleanup; an old attempt cannot adopt a replacement
+session's revision by starting a new parameterless leave.
 
 The six-second budget is not an end-to-end leave deadline: PlayFab lobby close and
 leave requests retain their separate request timeouts. Run the native-independent

@@ -236,22 +236,31 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             return PlatformResult<string>.Fail(available.Status, available.Message ?? UnavailableReason());
         }
 
-        if (HasNetwork)
+        int revision;
+        lock (_stateGate)
         {
-            return PlatformResult<string>.Fail(PlatformStatus.Failed, "A session is already running.",
-                "GameCorePartyService.HostAsync called with a live network.");
+            revision = _sessionRevision;
+            if (HasNetwork)
+            {
+                return PlatformResult<string>.Fail(PlatformStatus.Failed, "A session is already running.",
+                    "GameCorePartyService.HostAsync called with a live network.");
+            }
         }
 
         var stage = "starting the Party manager";
         try
         {
-            EnsureParty();
+            Task<IReadOnlyList<PartyRegion>> regionLookup;
+            lock (_stateGate)
+            {
+                EnsureParty(revision);
+                stage = "creating the Party local user";
+                EnsurePartyUser();
 
-            stage = "creating the Party local user";
-            EnsurePartyUser();
-
-            stage = "finding a Party region";
-            var regions = await AwaitRegionsAsync(cancellationToken).ConfigureAwait(false);
+                stage = "finding a Party region";
+                regionLookup = AwaitRegionsAsync(cancellationToken, revision);
+            }
+            var regions = await regionLookup.ConfigureAwait(false);
             if (regions.Count == 0)
             {
                 return PlatformResult<string>.Fail(PlatformStatus.NetworkFailure,
@@ -263,14 +272,14 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             Task<PartyCreateNewNetworkCompleted> creation;
             lock (_stateGate)
             {
-                ThrowIfSessionEnded();
+                ThrowIfSessionEnded(revision);
                 var create = _party!.CreateNewNetwork(_partyUser!, NetworkConfiguration(maxPlayers), regions);
                 creation = AwaitOperationAsync<PartyCreateNewNetworkCompleted>(create.Operation, cancellationToken);
             }
             var created = await creation.ConfigureAwait(false);
             if (!created.Succeeded)
             {
-                await LeaveAsync().ConfigureAwait(false);
+                await LeaveAsync(revision).ConfigureAwait(false);
                 return PlatformResult<string>.Fail(MapPartyStatus(created.Result),
                     WithDiagnostics(
                         PlayerMessage("The online match could not be created.", created.Result),
@@ -281,7 +290,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             string descriptor;
             lock (_stateGate)
             {
-                ThrowIfSessionEnded();
+                ThrowIfSessionEnded(revision);
                 descriptor = created.Descriptor.Serialize();
                 _hostEntityId = _online!.EntityId;
                 _hostToken = PartyHostToken.Create(_hostEntityId);
@@ -291,11 +300,11 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
             stage = "connecting the host endpoint and chat";
             var connected = await ConnectAuthenticateEndpointAndChatAsync(
-                descriptor, created.AppliedInitialInvitationIdentifier, cancellationToken)
+                descriptor, created.AppliedInitialInvitationIdentifier, cancellationToken, revision)
                 .ConfigureAwait(false);
             if (connected.Failed)
             {
-                await LeaveAsync().ConfigureAwait(false);
+                await LeaveAsync(revision).ConfigureAwait(false);
                 return PlatformResult<string>.Fail(
                     connected.Status,
                     WithDiagnostics(connected.Message ?? "The online match could not be joined.", connected.Diagnostics),
@@ -304,7 +313,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
             lock (_stateGate)
             {
-                ThrowIfSessionEnded();
+                ThrowIfSessionEnded(revision);
                 MarkLocalEndpoint(IPartyService.HostPeerId);
                 ConnectionString = EncodeInvite(
                     descriptor,
@@ -335,7 +344,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
             if (lobby.Failed || lobby.Value is null)
             {
-                await LeaveAsync().ConfigureAwait(false);
+                await LeaveAsync(revision).ConfigureAwait(false);
                 return PlatformResult<string>.Fail(lobby.Status,
                     WithDiagnostics(lobby.Message ?? "The lobby could not be created.", lobby.Result.Diagnostics),
                     lobby.Result.Diagnostics);
@@ -343,7 +352,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
             lock (_stateGate)
             {
-                ThrowIfSessionEnded();
+                ThrowIfSessionEnded(revision);
                 _lobbyId = lobby.Value.LobbyId;
                 JoinCode = lobby.Value.JoinCode;
                 HasNetwork = true;
@@ -352,12 +361,12 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
         catch (OperationCanceledException)
         {
-            await LeaveAsync().ConfigureAwait(false);
+            await CancelAttemptAsync(revision).ConfigureAwait(false);
             return PlatformResult<string>.Canceled();
         }
         catch (Exception ex) when (IsPlatformException(ex))
         {
-            await LeaveAsync().ConfigureAwait(false);
+            await LeaveAsync(revision).ConfigureAwait(false);
             return PlatformResult<string>.Fail(
                 PlatformStatus.Failed,
                 WithDiagnostics($"The online match could not be created while {stage}.", ex.Message),
@@ -496,13 +505,19 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             .ConfigureAwait(false);
     }
 
-    public async Task LeaveAsync()
+    public Task LeaveAsync() => LeaveAsync(null);
+
+    private async Task LeaveAsync(int? expectedRevision)
     {
         int revision;
         bool wasHost;
         string lobbyId;
         lock (_stateGate)
         {
+            if (expectedRevision is not null && expectedRevision != _sessionRevision)
+            {
+                return;
+            }
             if (!HasNetwork && _network is null && _party is null)
             {
                 ResetSessionState();
@@ -866,10 +881,15 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         string protocolVersion,
         CancellationToken cancellationToken)
     {
-        if (HasNetwork)
+        int revision;
+        lock (_stateGate)
         {
-            return PlatformResult.Fail(PlatformStatus.Failed, "A session is already running.",
-                "GameCorePartyService.JoinAsync called with a live network.");
+            revision = _sessionRevision;
+            if (HasNetwork)
+            {
+                return PlatformResult.Fail(PlatformStatus.Failed, "A session is already running.",
+                    "GameCorePartyService.JoinAsync called with a live network.");
+            }
         }
 
         try
@@ -879,25 +899,25 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             // own authenticated endpoint and matched against the token; see IsHostEntity.
             lock (_stateGate)
             {
-                EnsureParty();
+                EnsureParty(revision);
                 EnsurePartyUser();
                 _hostToken = hostToken;
                 _hostEntityId = string.Empty;
                 IsHost = false;
             }
 
-            var connected = await ConnectAuthenticateEndpointAndChatAsync(descriptor, invitation, cancellationToken)
+            var connected = await ConnectAuthenticateEndpointAndChatAsync(descriptor, invitation, cancellationToken, revision)
                 .ConfigureAwait(false);
             if (connected.Failed)
             {
-                await LeaveAsync().ConfigureAwait(false);
+                await LeaveAsync(revision).ConfigureAwait(false);
                 return connected;
             }
 
             Task<int> assignment;
             lock (_stateGate)
             {
-                ThrowIfSessionEnded();
+                ThrowIfSessionEnded(revision);
                 _peerAssignment = new TaskCompletionSource<int>();
                 SendControlHello();
                 assignment = AwaitPeerAssignmentAsync(cancellationToken);
@@ -905,14 +925,14 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             var assigned = await assignment.ConfigureAwait(false);
             if (assigned <= IPartyService.HostPeerId)
             {
-                await LeaveAsync().ConfigureAwait(false);
+                await LeaveAsync(revision).ConfigureAwait(false);
                 return PlatformResult.Fail(PlatformStatus.Failed, "The host assigned an invalid peer id.",
                     $"Assigned peer id {assigned}.");
             }
 
             lock (_stateGate)
             {
-                ThrowIfSessionEnded();
+                ThrowIfSessionEnded(revision);
                 HasNetwork = true;
                 LocalPeerId = assigned;
                 ConnectionString = EncodeInvite(descriptor, invitation, _hostToken, protocolVersion);
@@ -926,26 +946,32 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
         catch (OperationCanceledException)
         {
-            await LeaveAsync().ConfigureAwait(false);
-            return PlatformResult.Canceled();
+            return await CancelAttemptAsync(revision).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsPlatformException(ex))
         {
-            await LeaveAsync().ConfigureAwait(false);
+            await LeaveAsync(revision).ConfigureAwait(false);
             return PlatformResult.Fail(PlatformStatus.Failed, "That online match could not be joined.", ex.Message);
         }
+    }
+
+    private async Task<PlatformResult> CancelAttemptAsync(int revision)
+    {
+        await LeaveAsync(revision).ConfigureAwait(false);
+        return PlatformResult.Canceled();
     }
 
     private async Task<PlatformResult> ConnectAuthenticateEndpointAndChatAsync(
         string descriptor,
         string? invitation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int revision)
     {
         Task<PartyConnectToNetworkCompleted> connection;
         PartyOperationId authenticate;
         lock (_stateGate)
         {
-            ThrowIfSessionEnded();
+            ThrowIfSessionEnded(revision);
             (PartyOperationId connect, PartyNetwork network) =
                 _party!.ConnectToNetwork(PartyNetworkDescriptor.Deserialize(descriptor));
             _network = network;
@@ -965,7 +991,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         Task<PartyAuthenticateLocalUserCompleted> authentication;
         lock (_stateGate)
         {
-            ThrowIfSessionEnded();
+            ThrowIfSessionEnded(revision);
             _network = connected.Network;
             authentication = AwaitOperationAsync<PartyAuthenticateLocalUserCompleted>(authenticate, cancellationToken);
         }
@@ -980,7 +1006,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         Task<PartyCreateEndpointCompleted> endpointCreation;
         lock (_stateGate)
         {
-            ThrowIfSessionEnded();
+            ThrowIfSessionEnded(revision);
             endpointCreation = AwaitOperationAsync<PartyCreateEndpointCompleted>(
                 _network!.CreateEndpoint(_partyUser), cancellationToken);
         }
@@ -995,7 +1021,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         Task<PartyCreateChatControlCompleted> chatCreation;
         lock (_stateGate)
         {
-            ThrowIfSessionEnded();
+            ThrowIfSessionEnded(revision);
             _localEndpoint = endpoint.Endpoint;
             chatCreation = AwaitOperationAsync<PartyCreateChatControlCompleted>(
                 _party!.LocalDevice.CreateChatControl(_partyUser!, LanguageCode), cancellationToken);
@@ -1006,7 +1032,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             Task chatConnection;
             lock (_stateGate)
             {
-                ThrowIfSessionEnded();
+                ThrowIfSessionEnded(revision);
                 _localChat = chat.ChatControl;
                 ApplyLocalMute();
 
@@ -1021,7 +1047,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             await chatConnection.ConfigureAwait(false);
             lock (_stateGate)
             {
-                ThrowIfSessionEnded();
+                ThrowIfSessionEnded(revision);
                 ApplyChatPolicy();
             }
         }
@@ -1029,18 +1055,22 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         return PlatformResult.Ok();
     }
 
-    private void ThrowIfSessionEnded()
+    private void ThrowIfSessionEnded(int revision)
     {
-        if (_disposed || _disposeAfterPump || _leaving || _party is null || _partyUser is null)
+        if (revision != _sessionRevision || _disposed || _disposeAfterPump || _leaving || _party is null || _partyUser is null)
         {
             throw new OperationCanceledException("The Party session ended.");
         }
     }
 
-    private void EnsureParty()
+    private void EnsureParty(int? revision = null)
     {
         lock (_stateGate)
         {
+            if (revision is not null && revision != _sessionRevision)
+            {
+                throw new OperationCanceledException("The Party session ended.");
+            }
             if (_disposed || _disposeAfterPump || _leaving)
             {
                 throw new InvalidOperationException("The previous Party session is still closing.");
@@ -1167,11 +1197,11 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     private string UnavailableReason() => EnsureAvailable().Message ?? "Online play is not available in this build.";
 
-    private Task<IReadOnlyList<PartyRegion>> AwaitRegionsAsync(CancellationToken cancellationToken)
+    private Task<IReadOnlyList<PartyRegion>> AwaitRegionsAsync(CancellationToken cancellationToken, int revision)
     {
         lock (_stateGate)
         {
-            ThrowIfSessionEnded();
+            ThrowIfSessionEnded(revision);
             var regions = _party!.GetRegions();
             if (regions.Count > 0)
             {

@@ -58,6 +58,7 @@ internal static class PlayFabChecks
         await PartyPumpTeardownChecks(Check);
         PartyReentrantResetChecks(Check);
         PartyRegionResetChecks(Check);
+        await PartyAttemptCancellationChecks(Check);
 
         Check("adult account creation remains allowed", PlatformAgeGroup.Adult.AllowsSilentAccountCreation());
         Check("child account creation remains forbidden", !PlatformAgeGroup.Child.AllowsSilentAccountCreation());
@@ -561,6 +562,56 @@ internal static class PlayFabChecks
             && newOperation.IsCanceled && pending.Count == 0);
     }
 
+    private static async Task PartyAttemptCancellationChecks(Action<string, bool> check, bool nativeManager = false)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var type = typeof(GameCorePartyService);
+        var revision = (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!;
+        var oldWait = (Task)type.GetMethod("TryAwait", Flags)!.Invoke(party,
+            [default(PartyOperationId), CancellationToken.None])!;
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<PlatformResult> CancelOldAttemptAsync()
+        {
+            try
+            {
+                await oldWait;
+            }
+            catch (OperationCanceledException)
+            {
+                await resume.Task;
+                return await (Task<PlatformResult>)type.GetMethod("CancelAttemptAsync", Flags)!
+                    .Invoke(party, [revision])!;
+            }
+            throw new InvalidOperationException("The old attempt was not canceled.");
+        }
+        var canceledAttempt = CancelOldAttemptAsync();
+        var assignment = new TaskCompletionSource<int>();
+        type.GetField("_peerAssignment", Flags)!.SetValue(party, assignment);
+        type.GetField("_peerAssignmentCancellation", Flags)!.SetValue(party, new CancellationToken(true));
+        var reset = assignment.Task.ContinueWith(_ =>
+            type.GetMethod("ResetSessionState", Flags)!.Invoke(party, null),
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        party.Pump();
+        reset.GetAwaiter().GetResult();
+        var replacement = nativeManager ? PartyManager.Initialize("A1B2C") : null;
+        type.GetField("_party", Flags)!.SetValue(party, replacement);
+        type.GetProperty(nameof(party.HasNetwork))!.SetValue(party, true);
+        type.GetProperty(nameof(party.ConnectionString))!.SetValue(party, "replacement-session");
+        var replacementRevision = (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!;
+        var newWait = (Task)type.GetMethod("AwaitOperationAsync", Flags)!
+            .MakeGenericMethod(typeof(PartyOperationCompleted))
+            .Invoke(party, [default(PartyOperationId), CancellationToken.None])!;
+        resume.SetResult();
+        var canceled = await canceledAttempt.WaitAsync(TimeSpan.FromSeconds(3));
+        check("host/join cancellation handler retains the canceled result", canceled.WasCanceled);
+        check("old host/join cancellation cannot leave a replacement session",
+            party.HasNetwork && party.ConnectionString == "replacement-session"
+            && !newWait.IsCompleted
+            && ReferenceEquals(type.GetField("_party", Flags)!.GetValue(party), replacement)
+            && replacementRevision == (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!);
+    }
+
     private static void NativeLobbyResetChecks(Action<string, bool> check)
     {
         const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -627,6 +678,7 @@ internal static class PlayFabChecks
             NativeLobbyResetChecks(Check);
             PartyPumpTeardownChecks(Check, nativeManager: true).GetAwaiter().GetResult();
             PartyReentrantResetChecks(Check, nativeManager: true);
+            PartyAttemptCancellationChecks(Check, nativeManager: true).GetAwaiter().GetResult();
             return failures == 0 ? 0 : 1;
         }
         catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
