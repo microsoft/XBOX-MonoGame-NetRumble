@@ -48,7 +48,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         _xbl = new GameCoreXblContext(_runtime, identity);
 
 #if !NETRUMBLE_PLAYFAB_GAMESAVE
-        // The cloud tier is the GDK's connected storage (M10). The local tier moves with
+        // The cloud tier uses GDK.Net's XGameSaveFiles wrapper (M10). The local tier moves with
         // it onto the Xbox account, because a save service that no longer talks to
         // PlayFab must not still need a PlayFab login to decide which folder a file
         // belongs in; the PlayFab entity id is passed as the legacy key so a player
@@ -159,8 +159,8 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     public IPlatformUiService PlatformUi { get; }
 
     // --- Mixed-provider services -------------------------------------------
-    // Party, Activity and GameSaves are all backed by the same
-    // GameCoreOnlineSession, so the Xbox user produces exactly one PlayFab identity.
+    // Party and the optional PlayFab save tier share GameCoreOnlineSession.
+    // The default XGameSaveFiles tier uses the Xbox user directly.
     // GameInput is deliberately never GDK-backed - see its own remarks below.
 
     public IPartyService Party { get; }
@@ -172,8 +172,8 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     /// <remarks>
     /// <para>
     /// Which cloud tier is a build-time choice, because the two do not coexist usefully:
-    /// they would roam the same keys to two different places and disagree. Connected
-    /// storage (<see cref="GameCoreGameSaveService"/>) is the default and the one XBOX
+    /// they would roam the same keys to two different places and disagree. XGameSaveFiles
+    /// (<see cref="GameCoreGameSaveService"/>) is the default connected-storage backend XBOX
     /// certification is written against; defining <c>NETRUMBLE_PLAYFAB_GAMESAVE</c> -
     /// through <c>/p:NetRumbleCloudSave=PlayFab</c> - selects the PlayFab user-data tier
     /// instead, which is what the desktop <c>PlayFabPlatformProvider</c> uses
@@ -235,9 +235,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         await Identity.SignOutAsync().ConfigureAwait(false);
         _runtime.PumpUntil(_xbl.ShutdownAsync(), RemainingUntil(deadline));
 #if !NETRUMBLE_PLAYFAB_GAMESAVE
-        // Before the runtime goes down: the provider holds a native handle bound to a
-        // user that sign-out has already released.
-        _saves.Dispose();
+        await _saves.ShutdownAsync().ConfigureAwait(false);
 #endif
         await _online.ShutdownAsync().ConfigureAwait(false);
         await _runtime.ShutdownAsync().ConfigureAwait(false);

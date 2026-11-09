@@ -12,6 +12,10 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args.Contains("--gamesave-files-checks-only", StringComparer.OrdinalIgnoreCase))
+        {
+            return await GameSaveFilesChecks.Run().ConfigureAwait(false);
+        }
         if (args.Contains("--playfab-checks-only", StringComparer.OrdinalIgnoreCase))
         {
             return await PlayFabChecks.Run().ConfigureAwait(false);
@@ -60,6 +64,10 @@ internal static class Program
         await GameCorePartyAndActivityChecks.Run(mode).ConfigureAwait(false);
         await LanTransportChecks.Run().ConfigureAwait(false);
         await PlayFabChecks.Run().ConfigureAwait(false);
+        if (await GameSaveFilesChecks.Run().ConfigureAwait(false) != 0)
+        {
+            return 1;
+        }
         FontCoverageChecks.Run();
         await IdentityChecks.Run().ConfigureAwait(false);
         MatchEndChecks.Run();

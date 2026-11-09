@@ -18,7 +18,7 @@ have only ever compiled.
 | XBOX friends, activity, invites, recent players | Yes | Yes | Unavailable, because there is no platform surface to carry a join string | Unavailable |
 | XBOX achievement reporting | Yes | Yes | Local counters only, no XBOX award | Local counters only |
 | Rich presence | Yes | Yes | Unavailable | Unavailable |
-| Roaming cloud save for settings and achievement stats | Connected storage (`XGameSave`) | Connected storage (`XGameSave`) | PlayFab user data with `--playfab-title=<id>` | Local file only |
+| Roaming cloud save for settings and achievement stats | Connected storage (`XGameSaveFiles`) | Connected storage (`XGameSaveFiles`) | PlayFab user data with `--playfab-title=<id>` | Local file only |
 | Match history and counters | Local, per user | Local, per user | Local | Local |
 | Connectivity gating before online play is offered | Platform hint when known | Platform hint when known | Not gated | Not offered |
 | Lifecycle and controller detection | Focus and device detection | Suspend, resume, constrain, association detection | Desktop behaviour | Depends on platform |
@@ -36,10 +36,15 @@ sample favours a low-latency demonstration over a queue that has to fill.
 
 ## Cloud save tiers
 
-The GDK provider saves to GDK connected storage (`XGameSave`), so settings, achievement
+The GDK provider saves to GDK connected storage (`XGameSaveFiles`), so settings, achievement
 stats and match history roam together and the platform resolves conflicts.
+GDK.Net's `GameSaveFiles.GetFolderWithUiAsync` acquires the per-user folder on sign-in
+and reacquires it on resume. Ordinary file I/O retains the `NetRumbleSave` directory and
+existing key names, matching the platform's container/blob mapping for older saves.
+Writes use temporary files and atomic replacement; account changes invalidate queued work.
 
-The PlayFab user-data tier it replaced is still selectable with
+The default build selection is `/p:NetRumbleCloudSave=XGameSaveFiles`.
+The separate PlayFab user-data tier is still selectable with
 `/p:NetRumbleCloudSave=PlayFab`. The PlayFab developer decorator also uses this tier
 because it has no Xbox user handle for connected storage. Both paths now require the
 native Gaming Runtime and PlayFab libraries; only undecorated offline/LAN runs are

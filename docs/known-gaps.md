@@ -102,9 +102,11 @@ usually because it needs a signed-in account, XBOX Series X|S hardware or a seco
 - **Rich presence showing on a real XBOX profile.** The publisher is verified to emit the
   right id at the right moment, but no id has reached the service.
 - **Cloud save roaming between two machines.** Settings and achievement stats go to
-  connected storage on the GDK provider, but no part of that path has run against a real
-  save provider. An absent-blob first run has only ever been reasoned about, and roaming
-  needs a second device. The PlayFab tier has been proven against a fake cloud tier only.
+  XGameSaveFiles through GDK.Net on the GDK provider. File reads/writes, absent-file
+  first run, cancellation, and queued account-switch isolation are checked in temporary
+  test folders. Authenticated folder acquisition, system conflict UI, resume sync, and
+  roaming still need real accounts and a second device. The PlayFab tier has been proven
+  against a fake cloud tier only.
 - **Behaviour under real network conditions.** Join and invite flows are confirmed between
   two XBOX Series X|S consoles before the native PlayFab migration. Native authentication,
   user-data roaming, connected lobby creation/join, token renewal and host cleanup need

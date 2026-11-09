@@ -80,7 +80,15 @@ disposes Party and clears pending session work before notifying the game; expire
 sign-in also clears the shared PlayFab identity so another Host or Join can authenticate.
 
 The user-data payload format is unchanged: Base64 under the existing keys, with a
-750-byte limit. XGameSave remains the default console cloud tier.
+750-byte limit. XGameSaveFiles is the default GDK cloud tier, through GDK.Net's
+`GameSaveFiles.GetFolderWithUiAsync`. It acquires a synchronized folder on sign-in and
+again on resume; the OS handles cloud upload. The `NetRumbleSave` directory and unchanged
+key filenames preserve the platform's mapping from older containers and blobs.
+File operations are serialized, writes replace a temporary file atomically, and account
+changes cancel active work and reject queued work captured for the old account.
+Shutdown waits for folder acquisition and file operations before releasing the runtime.
+See the [XGameSaveFiles overview](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/game-save/xgamesavefiles)
+and [API migration mapping](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/game-save/game-saves-walkthroughs-and-samples#interop-between-xgamesave-and-xgamesavefiles).
 
 ## Connectivity and lifecycle
 

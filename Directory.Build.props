@@ -20,14 +20,14 @@
     Which cloud save tier the GDK provider compiles against.
 
     The two tiers cannot coexist: both roam the same keys, so having both would mean two
-    copies of a player's progress that silently disagree. XGameSave - the GDK's connected
+    copies of a player's progress that silently disagree. XGameSaveFiles - the GDK's connected
     storage - is the default because it is the save system XBOX certification is written
     against and the only one the platform will sync between a player's devices. Build with
     /p:NetRumbleCloudSave=PlayFab to fall back to the PlayFab user-data tier, which needs
     no console and is what the desktop PlayFab-only provider uses regardless.
   -->
   <PropertyGroup>
-    <NetRumbleCloudSave Condition="'$(NetRumbleCloudSave)' == ''">XGameSave</NetRumbleCloudSave>
+    <NetRumbleCloudSave Condition="'$(NetRumbleCloudSave)' == ''">XGameSaveFiles</NetRumbleCloudSave>
     <DefineConstants Condition="'$(NetRumbleCloudSave)' == 'PlayFab'">$(DefineConstants);NETRUMBLE_PLAYFAB_GAMESAVE</DefineConstants>
   </PropertyGroup>
 
@@ -37,8 +37,8 @@
     a player's saves somewhere other than where the person building it intended.
   -->
   <Target Name="ValidateNetRumbleCloudSave" BeforeTargets="PrepareForBuild">
-    <Error Condition="'$(NetRumbleCloudSave)' != 'XGameSave' AND '$(NetRumbleCloudSave)' != 'PlayFab'"
-           Text="NetRumbleCloudSave must be 'XGameSave' or 'PlayFab'; got '$(NetRumbleCloudSave)'." />
+    <Error Condition="'$(NetRumbleCloudSave)' != 'XGameSaveFiles' AND '$(NetRumbleCloudSave)' != 'PlayFab'"
+           Text="NetRumbleCloudSave must be 'XGameSaveFiles' or 'PlayFab'; got '$(NetRumbleCloudSave)'." />
   </Target>
 
 </Project>
