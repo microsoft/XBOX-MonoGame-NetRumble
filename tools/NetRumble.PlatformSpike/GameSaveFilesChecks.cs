@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using GDK.Net.Users;
 using NetRumble.Platform;
+using NetRumble.Platform.GameCore;
 using NetRumble.Platform.GameCore.Services;
 
 namespace NetRumble.PlatformSpike;
@@ -23,6 +24,17 @@ internal static class GameSaveFilesChecks
         Directory.CreateDirectory(root);
         try
         {
+            foreach (var titleId in new[] { PlayFabConfiguration.PlaceholderTitleId, "A1B2C" })
+            {
+                var configuration = new PlayFabConfiguration { TitleId = titleId };
+                await using var provider = new GameCorePlatformProvider(root, configuration);
+                var label = configuration.IsPlaceholder ? "unconfigured" : "configured";
+                Check($"GameCore uses XGameSaveFiles with {label} PlayFab",
+                    provider.GameSaves is GameCoreGameSaveService);
+                Check($"GameCore saves require connected storage with {label} PlayFab",
+                    (await provider.GameSaves.SaveCloudAsync("settings", new byte[] { 1 })).Status
+                        == PlatformStatus.Unavailable);
+            }
             using var fixture = new Fixture(root);
             var saves = fixture.Saves;
             var missing = await saves.LoadCloudAsync("settings");

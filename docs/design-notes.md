@@ -80,7 +80,7 @@ disposes Party and clears pending session work before notifying the game; expire
 sign-in also clears the shared PlayFab identity so another Host or Join can authenticate.
 
 The user-data payload format is unchanged: Base64 under the existing keys, with a
-750-byte limit. XGameSaveFiles is the default GDK cloud tier, through GDK.Net's
+750-byte limit. The GDK provider always uses XGameSaveFiles, through GDK.Net's
 `GameSaveFiles.GetFolderWithUiAsync`. It acquires a synchronized folder on sign-in and
 again on resume; the OS handles cloud upload. The `NetRumbleSave` directory and unchanged
 key filenames preserve the platform's mapping from older containers and blobs.

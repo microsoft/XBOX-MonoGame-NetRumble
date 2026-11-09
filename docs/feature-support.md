@@ -43,12 +43,11 @@ and reacquires it on resume. Ordinary file I/O retains the `NetRumbleSave` direc
 existing key names, matching the platform's container/blob mapping for older saves.
 Writes use temporary files and atomic replacement; account changes invalidate queued work.
 
-The default build selection is `/p:NetRumbleCloudSave=XGameSaveFiles`.
-The separate PlayFab user-data tier is still selectable with
-`/p:NetRumbleCloudSave=PlayFab`. The PlayFab developer decorator also uses this tier
-because it has no Xbox user handle for connected storage. Both paths now require the
-native Gaming Runtime and PlayFab libraries; only undecorated offline/LAN runs are
-GDK-free.
+The GDK provider always uses XGameSaveFiles; its save backend does not depend on
+PlayFab configuration. The separate PlayFab developer decorator uses PlayFab user
+data because it has no Xbox user handle for connected storage. Both providers require
+the native Gaming Runtime; PlayFab services also require the native PlayFab libraries.
+Only undecorated offline/LAN runs are GDK-free.
 
 Neither tier has been round-tripped between two devices. See
 [Known gaps](known-gaps.md#never-observed-end-to-end).

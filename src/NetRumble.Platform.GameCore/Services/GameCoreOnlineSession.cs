@@ -3,7 +3,7 @@ using NetRumble.Platform.PlayFab;
 
 namespace NetRumble.Platform.GameCore.Services;
 
-/// <summary>Xbox-owned native PlayFab identity shared by Party, Lobby and user data.</summary>
+/// <summary>Xbox-owned native PlayFab identity shared by Party and Lobby.</summary>
 internal sealed class GameCoreOnlineSession : IDisposable
 {
     private readonly GameCoreRuntime _runtime;
@@ -13,18 +13,16 @@ internal sealed class GameCoreOnlineSession : IDisposable
     private PlatformStatus _lastSignInStatus = PlatformStatus.Ok;
     private bool _disposed;
 
-    internal GameCoreOnlineSession(GameCoreRuntime runtime, PlayFabConfiguration configuration,
-        string? localSaveRoot = null)
+    internal GameCoreOnlineSession(GameCoreRuntime runtime, PlayFabConfiguration configuration)
     {
         _runtime = runtime;
-        _services = new PlayFabOnlineServices(configuration, localSaveRoot);
+        _services = new PlayFabOnlineServices(configuration);
     }
 
     internal bool IsSignedIn => _services.IsSignedIn;
     internal PlayFabEntityLease? AcquireEntity() => _services.AcquireEntity();
     internal string EntityId => _services.EntityId;
     internal PlayFabLobbyClient Lobbies => _services.Lobbies;
-    internal IGameSaveService GameSaves => _services.GameSaves;
     internal PlayFabConfiguration Configuration => _services.Configuration;
     internal bool CanAttemptLogin => !Configuration.IsPlaceholder;
     internal string UnavailableReason => Configuration.IsPlaceholder
