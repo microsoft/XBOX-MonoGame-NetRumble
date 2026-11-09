@@ -38,6 +38,7 @@ public sealed class LifecycleCoordinator
     /// <summary>XR-115: the player currently has no controller.</summary>
     private bool _controllerMissing;
     private bool _matchDroppedBySuspend;
+    private Task _saveReconciliation = Task.CompletedTask;
 
     /// <summary>
     /// Whether a live session existed as of the last frame (XR-001).
@@ -84,7 +85,47 @@ public sealed class LifecycleCoordinator
     {
         if (online)
         {
+            if (_context.Platform.GameSaves is ICloudSaveSynchronization { RequiresReconciliation: true }
+                && _saveReconciliation.IsCompleted)
+            {
+                _saveReconciliation = ReconcileSavesAsync();
+            }
+            else
+            {
+                _context.Achievements.RetryPending();
+            }
+        }
+    }
+
+    private async Task ReconcileSavesAsync()
+    {
+        try
+        {
+            if (_context.Platform.GameSaves is ICloudSaveSynchronization synchronization)
+            {
+                var result = await synchronization.ReconcileAsync(async token =>
+                {
+                    var settings = await _context.CloudSettings.PullAsync(token);
+                    return settings.Failed
+                        ? settings.Result
+                        : await _context.Achievements.ReconcileCloudAsync(token);
+                });
+                if (result.Failed)
+                {
+                    CrashLog.Mark($"gamesave: resume reconciliation did not complete: {result}");
+                    return;
+                }
+                await _context.Achievements.FlushAsync(force: true);
+            }
             _context.Achievements.RetryPending();
+        }
+        catch (OperationCanceledException)
+        {
+            CrashLog.Mark("gamesave: resume reconciliation canceled by a save-session change.");
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Fatal("gamesave: resume reconciliation failed", ex);
         }
     }
 
@@ -255,10 +296,8 @@ public sealed class LifecycleCoordinator
         // platform took away, so they are started again from a known state.
         _context.Audio.PlayMusic();
 
-        // XR-055: a report that failed in the seconds before the suspend - or against a
-        // service that had already begun tearing down - is still owed. Nothing in the game
-        // has changed across the freeze, but the service's willingness to listen has.
-        _context.Achievements.RetryPending();
+        // Reconcile downloaded saves before cloud writes or achievement retries resume.
+        _saveReconciliation = ReconcileSavesAsync();
 
         // XR-048: everything the title knows about the account was answered before the
         // suspend, and the shell is exactly where a player changes their gamertag, their

@@ -11,7 +11,7 @@ namespace NetRumble.Platform.GameCore.Services;
 /// Adds roaming saves through GDK.Net's <see cref="GameSaveFiles"/> wrapper.
 /// The platform synchronizes the returned folder; the title uses ordinary file I/O.
 /// </summary>
-internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDisposable
+internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloudSaveSynchronization, IDisposable
 {
     // Keep the old container/key names: XGameSaveFiles maps existing blobs to these paths.
     private const string ContainerName = "NetRumbleSave";
@@ -21,11 +21,20 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
     private readonly GameCoreIdentityService _identity;
     private readonly object _stateGate = new();
     private readonly SemaphoreSlim _cloudGate = new(1, 1);
+    private readonly SemaphoreSlim _reconcileGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
-    private CancellationTokenSource? _activeOperation;
+    private CancellationTokenSource _sessionCancellation = new();
+    private User? _saveUser;
     private SaveFolder? _folder;
     private long _revision;
     private bool _disposed;
+    private bool _suspended;
+    private bool _requiresReconciliation;
+
+    public bool RequiresReconciliation
+    {
+        get { lock (_stateGate) { return _requiresReconciliation; } }
+    }
 
     internal GameCoreGameSaveService(
         GameCoreRuntime runtime,
@@ -37,11 +46,18 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
     {
         _runtime = runtime;
         _identity = identity;
+        _saveUser = identity.TryGetUser(out var user) ? user : null;
         _identity.UserChanged += OnUserChanged;
         _runtime.LifecycleChanged += OnLifecycleChanged;
     }
 
-    public override async Task<PlatformResult> SaveCloudAsync(
+    public override Task<PlatformResult> SaveCloudAsync(
+        string key, ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
+        => !_runtime.IsInitialized
+            ? Task.FromResult(PlatformResult.Unavailable("Sign in to Xbox to access roaming saves."))
+            : _runtime.Dispatcher.Marshal(SaveCloudWorkerAsync(key, data, cancellationToken));
+
+    private async Task<PlatformResult> SaveCloudWorkerAsync(
         string key, ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
     {
         if (!IsValidCloudKey(key))
@@ -66,6 +82,10 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
                 lock (_stateGate)
                 {
                     CheckCurrent(folder.User, folder.Revision, token);
+                    if (_requiresReconciliation)
+                    {
+                        throw new OperationCanceledException("Roaming saves are waiting for resume reconciliation.");
+                    }
                     File.Move(temp, path, overwrite: true);
                 }
                 return true;
@@ -81,12 +101,18 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
                     CrashLog.Mark($"gamesave: temporary save cleanup failed: {ex.Message}");
                 }
             }
-        }, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken, writing: true).ConfigureAwait(false);
         return result.Result;
     }
 
     public override Task<PlatformResult<byte[]>> LoadCloudAsync(
         string key, CancellationToken cancellationToken = default)
+        => !_runtime.IsInitialized
+            ? Task.FromResult(PlatformResult<byte[]>.Unavailable("Sign in to Xbox to access roaming saves."))
+            : _runtime.Dispatcher.Marshal(LoadCloudWorkerAsync(key, cancellationToken));
+
+    private Task<PlatformResult<byte[]>> LoadCloudWorkerAsync(
+        string key, CancellationToken cancellationToken)
     {
         if (!IsValidCloudKey(key))
         {
@@ -119,9 +145,9 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
 
     private async Task<PlatformResult<T>> WithFolderAsync<T>(
         string key, Func<SaveFolder, CancellationToken, Task<T>> operation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool writing = false)
     {
-        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+        using var lifetime = CreateLifetime(cancellationToken);
         var token = lifetime.Token;
         var entered = false;
         try
@@ -131,9 +157,13 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
             long revision;
             lock (_stateGate)
             {
-                if (_disposed || !_runtime.IsInitialized || !_identity.TryGetUser(out user))
+                if (_disposed || _suspended || !_runtime.IsInitialized || !_identity.TryGetUser(out user))
                 {
                     return PlatformResult<T>.Unavailable("Sign in to Xbox to access roaming saves.");
+                }
+                if (writing && _requiresReconciliation)
+                {
+                    return PlatformResult<T>.Unavailable("Roaming saves are waiting for resume reconciliation.");
                 }
                 revision = _revision;
             }
@@ -143,7 +173,6 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
             lock (_stateGate)
             {
                 CheckCurrent(user, revision, token);
-                _activeOperation = lifetime;
                 folder = _folder;
             }
 
@@ -194,10 +223,6 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
         {
             if (entered)
             {
-                lock (_stateGate)
-                {
-                    _activeOperation = null;
-                }
                 _cloudGate.Release();
             }
         }
@@ -206,7 +231,7 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
     private void CheckCurrent(User user, long revision, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        if (_disposed || revision != _revision || !_identity.TryGetUser(out var current)
+        if (_disposed || _suspended || revision != _revision || !_identity.TryGetUser(out var current)
             || !ReferenceEquals(current, user))
         {
             throw new OperationCanceledException("The signed-in account or save session changed.");
@@ -215,7 +240,17 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
 
     private void OnUserChanged(PlatformUser? user)
     {
-        InvalidateFolder();
+        lock (_stateGate)
+        {
+            _identity.TryGetUser(out var current);
+            if (_disposed || ReferenceEquals(_saveUser, current))
+            {
+                return;
+            }
+            _saveUser = current;
+            InvalidateFolder();
+            _requiresReconciliation = false;
+        }
         if (user is not null)
         {
             _ = InitializeAsync();
@@ -224,10 +259,18 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
 
     private void OnLifecycleChanged(PlatformLifecycleEvent change)
     {
-        if (change == PlatformLifecycleEvent.Resumed)
+        if (change is PlatformLifecycleEvent.Suspending or PlatformLifecycleEvent.Resumed)
         {
-            InvalidateFolder();
-            _ = InitializeAsync();
+            lock (_stateGate)
+            {
+                _suspended = change == PlatformLifecycleEvent.Suspending;
+                _requiresReconciliation = true;
+                InvalidateFolder();
+            }
+            if (change == PlatformLifecycleEvent.Resumed)
+            {
+                _ = InitializeAsync();
+            }
         }
     }
 
@@ -240,7 +283,87 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
         {
             _revision++;
             _folder = null;
-            _activeOperation?.Cancel();
+            _sessionCancellation.Cancel();
+            _sessionCancellation.Dispose();
+            _sessionCancellation = new CancellationTokenSource();
+        }
+    }
+
+    public Task<PlatformResult> ReconcileAsync(
+        Func<CancellationToken, Task<PlatformResult>> reconcile,
+        CancellationToken cancellationToken = default)
+        => _runtime.Dispatcher.Marshal(ReconcileWorkerAsync(reconcile, cancellationToken));
+
+    private async Task<PlatformResult> ReconcileWorkerAsync(
+        Func<CancellationToken, Task<PlatformResult>> reconcile, CancellationToken cancellationToken)
+    {
+        using var lifetime = CreateLifetime(cancellationToken);
+        var entered = false;
+        try
+        {
+            await _reconcileGate.WaitAsync(lifetime.Token).ConfigureAwait(false);
+            entered = true;
+            lock (_stateGate)
+            {
+                if (!_requiresReconciliation)
+                {
+                    return PlatformResult.Ok();
+                }
+            }
+            var initialized = await WithFolderAsync("reconcile",
+                (folder, _) => Task.FromResult(folder), lifetime.Token).ConfigureAwait(false);
+            if (initialized.Failed || initialized.Value is not { } folder)
+            {
+                return initialized.Result;
+            }
+            var completion = new TaskCompletionSource<PlatformResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var token = lifetime.Token;
+            _runtime.Dispatcher.Post(async () =>
+            {
+                try
+                {
+                    token.ThrowIfCancellationRequested();
+                    completion.TrySetResult(await reconcile(token));
+                }
+                catch (OperationCanceledException)
+                {
+                    completion.TrySetCanceled(token);
+                }
+                catch (Exception ex)
+                {
+                    completion.TrySetException(ex);
+                }
+            });
+            var result = await completion.Task.ConfigureAwait(false);
+            lock (_stateGate)
+            {
+                CheckCurrent(folder.User, folder.Revision, lifetime.Token);
+                if (result.Succeeded)
+                {
+                    _requiresReconciliation = false;
+                }
+            }
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            return PlatformResult.Canceled();
+        }
+        finally
+        {
+            if (entered)
+            {
+                _reconcileGate.Release();
+            }
+        }
+    }
+
+    private CancellationTokenSource CreateLifetime(CancellationToken cancellationToken)
+    {
+        lock (_stateGate)
+        {
+            return CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken, _shutdown.Token, _sessionCancellation.Token);
         }
     }
 
@@ -272,7 +395,7 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDispo
             _disposed = true;
             _revision++;
             _folder = null;
-            _activeOperation?.Cancel();
+            _sessionCancellation.Cancel();
         }
         _identity.UserChanged -= OnUserChanged;
         _runtime.LifecycleChanged -= OnLifecycleChanged;

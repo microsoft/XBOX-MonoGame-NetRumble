@@ -312,23 +312,37 @@ public sealed class AchievementStats
     /// </summary>
     public async Task SyncCloudAsync(IGameSaveService saves, CancellationToken cancellationToken = default)
     {
+        if ((await PullCloudAsync(saves, cancellationToken)).Succeeded)
+        {
+            await SaveAsync(saves, cancellationToken);
+        }
+    }
+
+    /// <summary>Merges synchronized cloud progress without writing back to the cloud.</summary>
+    public async Task<PlatformResult> PullCloudAsync(
+        IGameSaveService saves, CancellationToken cancellationToken = default)
+    {
         var result = await saves.LoadCloudAsync(SaveKey, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (result.Failed)
         {
             // Offline, signed out, or the provider has no cloud tier. The local copy is
             // still authoritative for this device; nothing is lost.
-            return;
+            return result.Result;
         }
 
-        if (result.Value is { Length: > 0 } bytes && TryParse(bytes) is { } cloud)
+        if (result.Value is { Length: > 0 } bytes)
         {
+            if (TryParse(bytes) is not { } cloud)
+            {
+                return PlatformResult.Fail(PlatformStatus.Failed,
+                    "Could not read your saved progress.", "The cloud achievement record is malformed.");
+            }
             MergeFrom(cloud);
         }
 
-        // Unconditional: even when the cloud had nothing to add, this is the write that
-        // seeds a brand new account from whatever was earned offline.
-        await SaveAsync(saves, cancellationToken);
+        return PlatformResult.Ok();
     }
 
     /// <summary>Writes both tiers. The cloud write is best-effort and never reported.</summary>
@@ -338,7 +352,7 @@ public sealed class AchievementStats
         IsDirty = false;
 
         await saves.SaveLocalAsync(SaveKey, bytes, cancellationToken);
-        await saves.SaveCloudAsync(SaveKey, bytes, cancellationToken);
+        await saves.SaveCloudAsync(SaveKey, Serialise(), cancellationToken);
     }
 
     /// <summary>

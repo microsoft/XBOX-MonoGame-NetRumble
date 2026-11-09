@@ -632,12 +632,25 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
 
         try
         {
-            Task.WhenAll(pending).Wait(TimeSpan.FromSeconds(3));
+            var work = Task.WhenAll(pending);
+            var deadline = Environment.TickCount64 + 3000;
+            while (!work.IsCompleted && Environment.TickCount64 < deadline)
+            {
+                _platform.Runtime.Pump();
+                Thread.Sleep(1);
+            }
+            if (work.IsCompleted)
+            {
+                work.GetAwaiter().GetResult();
+            }
+            else
+            {
+                CrashLog.Mark("gamesave: exit flush exceeded its three-second budget.");
+            }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Shutdown. Nothing useful can be done with a failure here, and throwing
-            // would turn a lost cloud write into a crash on exit.
+            CrashLog.Fatal("gamesave: exit flush failed", ex);
         }
     }
 
