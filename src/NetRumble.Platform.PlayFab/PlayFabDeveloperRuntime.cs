@@ -4,7 +4,7 @@ using NetRumble.Platform.Diagnostics;
 
 namespace NetRumble.Platform.PlayFab;
 
-/// <summary>Native runtime ownership for the offline/LAN PlayFab developer path.</summary>
+/// <summary>Native runtime ownership for the offline PlayFab developer path.</summary>
 internal sealed class PlayFabDeveloperRuntime(
     IPlatformRuntime inner, PlayFabOnlineServices services,
     Func<GameRuntime> startRuntime, Action<GameRuntime> stopRuntime)

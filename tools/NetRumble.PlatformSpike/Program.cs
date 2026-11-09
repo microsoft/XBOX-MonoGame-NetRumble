@@ -52,6 +52,7 @@ internal static class Program
 
         await StepLocalSave(platform).ConfigureAwait(false);
         StepCoreTypes();
+        StepProviderModes();
         StepPumpBudget(platform);
         PhysicsChecks.Run();
         ArsenalChecks.Run();
@@ -62,7 +63,6 @@ internal static class Program
         XblInteropChecks.Run(mode);
         await PlatformServicesChecks.Run(platform).ConfigureAwait(false);
         await GameCorePartyAndActivityChecks.Run(mode).ConfigureAwait(false);
-        await LanTransportChecks.Run().ConfigureAwait(false);
         await PlayFabChecks.Run().ConfigureAwait(false);
         if (await GameSaveFilesChecks.Run().ConfigureAwait(false) != 0)
         {
@@ -187,6 +187,32 @@ internal static class Program
         Check("Playable mask == 19", (int)MatchState.Playable == 19);
         Check("World is 2400 square",
             NRConst.WorldWidth == 2400 && NRConst.WorldHeight == 2400);
+
+        Console.WriteLine();
+    }
+
+    private static void StepProviderModes()
+    {
+        Console.WriteLine("Provider modes");
+
+        Check("only Auto, Offline and GameCore are supported",
+            Enum.GetValues<PlatformProviderMode>().SequenceEqual(
+                [PlatformProviderMode.Auto, PlatformProviderMode.Offline, PlatformProviderMode.GameCore]));
+        Check("no mode selects Auto",
+            PlatformProviderFactory.ResolveMode([]) == PlatformProviderMode.Auto);
+
+        foreach (var mode in Enum.GetValues<PlatformProviderMode>())
+        {
+            Check($"{mode} resolves case-insensitively",
+                PlatformProviderFactory.ResolveMode([$"--PLATFORM={mode.ToString().ToUpperInvariant()}"]) == mode);
+        }
+
+        Check("an unknown name selects Auto",
+            PlatformProviderFactory.ResolveMode(["--platform=unsupported"]) == PlatformProviderMode.Auto);
+        Check("an undefined numeric mode selects Auto",
+            PlatformProviderFactory.ResolveMode(["--platform=3"]) == PlatformProviderMode.Auto);
+        Check("Offline never runs native GDK checks",
+            !GdkCheckGate.RunsNativeGdk(PlatformProviderMode.Offline));
 
         Console.WriteLine();
     }

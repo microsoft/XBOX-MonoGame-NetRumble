@@ -14,7 +14,6 @@ explain the decisions behind it.
 | Sign-in progress screen and offline fallback | `src/NetRumble.Game/UI/Screens/AcquireUserScreen.cs` |
 | PlayFab Party as the match transport | `src/NetRumble.Platform.GameCore/Services/GameCorePartyService.cs`, `src/NetRumble.Core/Net/PartyMatchNetwork.cs` |
 | Join-code discovery with PlayFab Lobby | `src/NetRumble.Platform.PlayFab/PlayFabLobbyClient.cs` |
-| A second transport behind the same interface | `src/NetRumble.Platform.Lan/LanPartyService.cs`, `src/NetRumble.Platform.Lan/LanLink.cs` |
 | Multiplayer and communications privilege checks | `src/NetRumble.Platform.GameCore/Services/GameCorePrivilegeService.cs` |
 | Per-player mute, block and avoid enforcement | `src/NetRumble.Platform.GameCore/Services/GameCorePrivacyService.cs` |
 | Text verification before player-authored content is shown | `src/NetRumble.Platform.GameCore/Services/GameCoreModerationService.cs` |
@@ -48,7 +47,7 @@ been proven by anyone without access to that title and its sandbox.
 | `ISocialService` | Complete | Complete. It re-queries rather than tracking a live group, so it raises no change event. | Needs a signed-in account |
 | `IGameInputService` | Unused | A null implementation in every provider. It reports no devices and raises no events. | Not applicable |
 | `IPlatformUiService` | Complete | Complete | Interactive calls unverified end to end |
-| `IPartyService` | Refuses | Party networking, Lobby join-code publishing, messaging and chat are wired | Transport proven over loopback and LAN. No run under real network conditions. |
+| `IPartyService` | Refuses | Party networking, Lobby join-code publishing, messaging and chat are wired | Join and invite flows proven between two XBOX Series X\|S consoles. |
 
 Run the native-independent save-file checks with
 `dotnet run --project tools\NetRumble.PlatformSpike -- --gamesave-files-checks-only`.
@@ -69,18 +68,13 @@ about an account rather than a reading from a device.
 
 ## Peer trust
 
-Peer identity is authenticated on both transports.
-
-- The GDK provider accepts a "welcome" control packet only from the actual host entity,
-  only while a join is in flight, and only when the claimed peer id is valid. Without those
-  checks any player in the session could take authority over another.
-- The LAN transport carries a per-link session token issued during the connection
-  handshake and required on every link-scoped datagram.
+The GDK provider accepts a "welcome" control packet only from the actual host entity,
+only while a join is in flight, and only when the claimed peer id is valid. Without those
+checks any player in the session could take authority over another.
 
 `HostAsync`, `JoinAsync` and `JoinByConnectionStringAsync` all take an explicit
 `protocolVersion` rather than reading a static, so no layer can disagree about which
 version it is running. An absent version counts as a mismatch and the join is refused
 before a Party endpoint is created.
 
-See [Design notes](design-notes.md#network-trust-boundary) for the full reasoning, and
-[Known gaps](known-gaps.md#networking) for what the LAN transport still does not do.
+See [Design notes](design-notes.md#network-trust-boundary) for the full reasoning.

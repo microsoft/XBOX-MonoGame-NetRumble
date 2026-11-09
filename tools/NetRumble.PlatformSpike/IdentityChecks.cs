@@ -15,12 +15,8 @@ namespace NetRumble.PlatformSpike;
 /// <c>SignInOptions.Interactive</c>, so <see cref="SignInOptions.DeveloperCustomId"/> was
 /// always null.
 ///
-/// Two consequences, neither visible to any check that existed. Every instance signed in
-/// as "Player", so a LAN match showed two identical names in the roster, the scoreboard
-/// and the standings and no one could tell the players apart. And the PlayFab custom-id
-/// sign-in path - the one documented as a complete working online identity on any dev box
-/// - returns early when the id is empty, so it could never run: dead code reachable only
-/// through an argument nothing forwarded.
+/// The PlayFab custom-id sign-in path returns early when the id is empty, so it could
+/// never run: dead code reachable only through an argument nothing forwarded.
 ///
 /// The providers were always correct. The caller was not, which is why this checks the
 /// call sites as text as well as the behaviour.

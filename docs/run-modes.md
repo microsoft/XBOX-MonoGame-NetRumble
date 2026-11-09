@@ -27,24 +27,6 @@ Forces the offline provider even on a machine that has the GDK. Choose **Continu
 Offline**, then **Practice**. Every platform service reports as unavailable or degrades
 to a local no-op, so this is the fastest way to work on the front end.
 
-## LAN
-
-```powershell
-dotnet run --project src\NetRumble.Game -- --platform=lan
-```
-
-Run two instances with this flag to play a real match between them. The LAN provider is a
-genuine UDP transport with hosting, five-character join codes and text chat, and it needs
-no GDK, no PlayFab title and no XBOX account.
-
-Because it bypasses every XBOX check, it cannot validate privacy, achievements, privileges
-or cloud save.
-
-> [!WARNING]
-> The LAN transport is a development tier and is **not internet safe**. It has no
-> encryption, no congestion control and no RTT estimation. See
-> [Known gaps](known-gaps.md#networking).
-
 ## Separate PlayFab title
 
 ```powershell
@@ -52,10 +34,10 @@ dotnet run --project src\NetRumble.Game -- --playfab-title=<id>
 ```
 
 The `NETRUMBLE_PLAYFAB_TITLE_ID` environment variable does the same thing. This composes
-with any provider mode. Adding PlayFab to offline or LAN now requires the Gaming Runtime
+with any provider mode. Adding PlayFab to offline requires the Gaming Runtime
 and native PlayFab redistributables, just like GameCore. In Debug builds, supply
 `--pf-user=<developer-id>` for custom-ID sign-in against a title you control; this
-authentication path is disabled in Release. LAN without PlayFab still needs no GDK.
+authentication path is disabled in Release. Offline without PlayFab still needs no GDK.
 
 Xbox sign-in, user-data calls and Lobby operations all use GDK.Net's native wrappers.
 There is no REST fallback. The selected provider must be initialized and pumped every
@@ -70,7 +52,8 @@ dotnet run --project src\NetRumble.Game -- --autopilot=join
 
 Drives two instances into a match without a human. `--autopilot-seconds=<n>` bounds the
 run and `--autopilot-file=<path>` writes a transcript. Useful for reproducing a netcode
-defect and for capturing frames.
+defect and for capturing frames. Multiplayer runs require the GDK provider, title access
+and signed-in accounts.
 
 ## Platform spike
 

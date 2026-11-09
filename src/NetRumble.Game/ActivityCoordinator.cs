@@ -289,7 +289,7 @@ public sealed class ActivityCoordinator
             }
 
             // Unavailable is not a failure to report or retry: it is a provider with no
-            // activity support at all - offline, LAN, or a desktop build with no GDK -
+            // activity support at all - offline or a desktop build with no GDK -
             // and retrying it would never do anything but spin.
             if (result.Status == PlatformStatus.Unavailable)
             {

@@ -17,9 +17,9 @@ so it is a hard prerequisite for **every** build rather than only the XBOX Serie
 Set the `GdkNetRoot` MSBuild property if your checkout lives somewhere other than beside
 this repository.
 
-All PlayFab calls use GDK.Net's native wrappers. PlayFab-enabled offline/LAN developer
+All PlayFab calls use GDK.Net's native wrappers. PlayFab-enabled offline developer
 runs also require the Gaming Runtime and the native Core, Services and Multiplayer
-libraries. An ordinary offline or LAN run without PlayFab still works without the GDK.
+libraries. An ordinary offline run without PlayFab still works without the GDK.
 The desktop build stages available native libraries from `GameDKCoreLatest`; console
 packaging stages the Xbox copies instead.
 
@@ -63,11 +63,8 @@ Sign-in, lobby discovery, Party networking, privileges, achievements and presenc
 against this sample's own sandbox and title. Reaching them requires an XBOX publishing
 relationship and a test account provisioned in that sandbox.
 
-Without that access you can still:
-
-- clone, build and play **Practice**;
-- run real netcode between two processes with the **LAN** transport, which needs no GDK,
-  no PlayFab title and no XBOX account.
+Without that access you can still clone, build and play **Practice**, which needs no GDK,
+no PlayFab title and no XBOX account.
 
 Join the [XBOX Developer Program](https://developer.microsoft.com/en-us/games/) to begin
 the onboarding process.

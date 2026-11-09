@@ -58,7 +58,6 @@
   <ItemGroup>
     <ProjectReference Include="$(GdkNetProject)" />
     <ProjectReference Include="..\NetRumble.Platform\NetRumble.Platform.csproj" />
-    <ProjectReference Include="..\NetRumble.Platform.Lan\NetRumble.Platform.Lan.csproj" />
     <ProjectReference Include="..\NetRumble.Platform.Offline\NetRumble.Platform.Offline.csproj" />
     <ProjectReference Include="..\NetRumble.Platform.PlayFab\NetRumble.Platform.PlayFab.csproj" />
   </ItemGroup>

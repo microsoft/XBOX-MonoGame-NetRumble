@@ -31,9 +31,7 @@ internal static class GdkCheckGate
 {
     /// <summary>
     /// True when the requested mode can legitimately touch the GDK.
-    /// <see cref="PlatformProviderMode.Lan"/> is excluded with Offline: it composes a
-    /// real UDP transport over the offline provider and deliberately never initializes
-    /// the Gaming Runtime.
+    /// Offline deliberately never initializes the Gaming Runtime.
     /// </summary>
     public static bool RunsNativeGdk(PlatformProviderMode mode)
         => mode is PlatformProviderMode.Auto or PlatformProviderMode.GameCore;

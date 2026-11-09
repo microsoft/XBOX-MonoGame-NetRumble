@@ -43,11 +43,6 @@ Haptics are absent and are not required.
 
 ## Networking
 
-- **The LAN transport is not internet safe.** Protocol version 2 added a per-link session
-  token, which raises the bar from "know two public constants" to "read this link's
-  traffic". It is not encryption and it stops no on-path observer. There is also no
-  congestion control and no RTT estimation. Either address those properly or keep the
-  transport inside its stated scope, which is development and same-network testing.
 - **`LoginWithCustomID` must never reach a shipping build.** It authenticates nobody. It is
   gated behind `SignInOptions.DeveloperCustomId` today, and that gate needs enforcing
   rather than documenting.

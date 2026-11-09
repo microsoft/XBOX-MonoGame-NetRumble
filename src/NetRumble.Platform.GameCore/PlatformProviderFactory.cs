@@ -1,7 +1,6 @@
 using NetRumble.Platform.Diagnostics;
 using NetRumble.Platform.GameCore;
 using NetRumble.Platform.GameCore.Interop;
-using NetRumble.Platform.Lan;
 using NetRumble.Platform.Offline;
 using NetRumble.Platform.PlayFab;
 
@@ -48,12 +47,8 @@ public static class PlatformProviderFactory
     {
         var provider = CreateCore(mode, saveRoot, playFab);
 
-        // PlayFab is a layer, not a mode. Cloud save is orthogonal to
-        // which transport and which platform runtime are in use, so making them a mode
-        // would need one enum member per combination - LanPlayFab, GameCorePlayFab - and
-        // a new one every time either axis grows. Wrapping instead means
-        // "--platform=lan --playfab-title=<id>" composes a real UDP transport with real
-        // cloud save without either side knowing about the other.
+        // PlayFab is a layer, not a mode. The offline provider can opt into native
+        // PlayFab identity and cloud save without changing its local-only transport.
         //
         // A placeholder title id is skipped entirely rather than wrapped and disabled:
         // an unwrapped provider reports its capabilities honestly for free. GameCore is
@@ -79,12 +74,6 @@ public static class PlatformProviderFactory
             PlatformProviderMode.Offline => new OfflinePlatformProvider(saveRoot),
 
             PlatformProviderMode.GameCore => new GameCorePlatformProvider(saveRoot, playFab),
-
-            // LAN: everything local from the offline provider, but a real UDP transport
-            // instead of its no-op party service. This is the only mode in which a match
-            // actually runs between two machines today; see docs/design-notes.md for why
-            // the GDK/PlayFab path cannot.
-            PlatformProviderMode.Lan => new LanPlatformProvider(new OfflinePlatformProvider(saveRoot)),
 
             // Auto: use the GDK when it is genuinely installed, otherwise run offline.
             // A dev box without the GDK is a supported configuration, so this is a
@@ -181,7 +170,8 @@ public static class PlatformProviderFactory
 
             var value = arg["--platform=".Length..];
 
-            if (Enum.TryParse<PlatformProviderMode>(value, ignoreCase: true, out var mode))
+            if (Enum.TryParse<PlatformProviderMode>(value, ignoreCase: true, out var mode)
+                && Enum.IsDefined(mode))
             {
                 return mode;
             }
@@ -201,10 +191,4 @@ public enum PlatformProviderMode
 
     /// <summary>Force the GDK provider; fails visibly when the runtime is missing.</summary>
     GameCore,
-
-    /// <summary>
-    /// Offline services with a real UDP transport, for LAN play and for testing the
-    /// netcode between two processes without a GDK, a PlayFab title or an Xbox account.
-    /// </summary>
-    Lan,
 }

@@ -157,8 +157,8 @@ internal static class PlatformServicesChecks
 
         // Fails closed (XR-045/XR-046). The GDK provider is only reached on a live Xbox
         // session, where an unreachable privacy service means the title cannot show that
-        // peer-to-peer communication is permitted - so it must not happen. Offline and
-        // LAN play never come through here; they reach OfflinePrivacyService, which still
+        // peer-to-peer communication is permitted - so it must not happen. Offline
+        // play never comes through here; it reaches OfflinePrivacyService, which still
         // allows all.
         var evaluate = await privacy.EvaluateAsync(["0"]).ConfigureAwait(false);
         Check("Permission evaluation returns a deny-all verdict without a signed-in user",

@@ -23,7 +23,6 @@ is what made that replacement invisible to the game: no file in `NetRumble.Core`
 | `NetRumble.Platform.Offline` | A complete local and no-op implementation | No. This is always the fallback. |
 | `NetRumble.Platform.GameCore` | Xbox services through XBOX GDK.NET, native handles, runtime lifetime | Yes. This is the disposable one. |
 | `NetRumble.Platform.PlayFab` | Native GDK.Net authentication, connected Lobby discovery and PlayFab user-data cloud saves | Yes |
-| `NetRumble.Platform.Lan` | A UDP transport that needs no GDK, title or account | Yes |
 | `NetRumble.Core` | Simulation, match flow, netcode messages | No |
 | `NetRumble.Game` | MonoGame rendering, input, audio, UI | No |
 
@@ -72,7 +71,7 @@ This is the reason gameplay, UI and netcode code contain no locks and no dispatc
 
 PlayFab Lobby operations are issued and their state changes drained from that same
 runtime pump. The developer PlayFab decorator also owns a native runtime and pumps its
-Lobby client; adding PlayFab to LAN does not turn LAN traffic into Party traffic.
+Lobby client; adding PlayFab to offline does not enable multiplayer transport.
 
 > [!IMPORTANT]
 > MonoGame installs no `SynchronizationContext`, so a bare `await` resumes on a thread-pool
@@ -121,7 +120,7 @@ replacing.
 
 PlayFab cloud save and lobby discovery are orthogonal to the transport and to the platform
 runtime. They are composed over whichever provider is active rather than being a provider
-mode of their own, so `--platform=lan --playfab-title=<id>` works without needing an enum
+mode of their own, so `--platform=offline --playfab-title=<id>` works without needing an enum
 value for every combination.
 
 ## Verifying a provider

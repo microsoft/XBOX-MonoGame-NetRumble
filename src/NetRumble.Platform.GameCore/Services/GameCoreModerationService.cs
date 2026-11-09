@@ -24,7 +24,7 @@ namespace NetRumble.Platform.GameCore.Services;
 /// unverified player text *is* the violation being guarded against, so a failed - or
 /// unreachable - verification call holds the message back rather than letting it
 /// through. XR-018 admits no exception for a missing Xbox Services context: on this
-/// provider that is a broken moderation service, not an absent audience. Offline and LAN
+/// provider that is a broken moderation service, not an absent audience. Offline
 /// chat reach <c>OfflineModerationService</c> instead.
 /// </para>
 /// <para>
@@ -83,8 +83,8 @@ internal sealed class GameCoreModerationService : IModerationService
             // session, so "no Xbox Services context" does not mean "offline play with
             // nobody to protect" - it means a moderation service that should be there is
             // not answering, while player-authored text is still about to be published
-            // to other people. Offline and LAN chat never come through this class; they
-            // reach OfflineModerationService, which still passes text through.
+            // to other people. Offline chat never comes through this class; it
+            // reaches OfflineModerationService, which still passes text through.
             CrashLog.MarkOnce(
                 "verify-no-context",
                 "moderation: no Xbox Services context, holding player text back (XR-018)");

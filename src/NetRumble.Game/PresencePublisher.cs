@@ -86,7 +86,7 @@ public sealed class PresencePublisher
 
     private void Publish()
     {
-        // No capability means no presence surface - the offline and LAN providers report
+        // No capability means no presence surface - the offline provider reports
         // this - so there is nothing to call and nothing to fail.
         if (!_context.Platform.Capabilities.HasFlag(PlatformCapabilities.Presence))
         {

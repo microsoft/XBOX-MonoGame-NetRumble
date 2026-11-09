@@ -24,7 +24,7 @@ namespace NetRumble.Game.UI.Elements;
 /// </para>
 /// <para>
 /// Players with no Xbox user id are omitted rather than shown as dead rows: an offline
-/// practice bot and a LAN peer both have a display name and no gamercard behind it.
+/// practice bot has a display name and no gamercard behind it.
 /// </para>
 /// </remarks>
 public sealed class ProfileList : Screen
