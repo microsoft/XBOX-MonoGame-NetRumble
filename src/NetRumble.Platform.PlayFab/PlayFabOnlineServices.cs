@@ -23,10 +23,10 @@ public sealed class PlayFabOnlineServices : IDisposable
     private long _generation;
     private bool _disposed;
 
-    public PlayFabOnlineServices(PlayFabConfiguration configuration, string? localSaveRoot = null)
+    public PlayFabOnlineServices(PlayFabConfiguration configuration)
     {
         Configuration = configuration;
-        GameSaves = new PlayFabGameSaveService(configuration, AcquireEntity, _shutdown.Token, localSaveRoot, () => EntityId);
+        GameSaves = new PlayFabGameSaveService(configuration, AcquireEntity, _shutdown.Token, currentUserId: () => EntityId);
         Lobbies = new PlayFabLobbyClient(configuration, AcquireEntity, _shutdown.Token);
         Lobbies.ConnectionLost += failure =>
         {

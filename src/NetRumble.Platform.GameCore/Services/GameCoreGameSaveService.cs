@@ -8,313 +8,306 @@ using NetRumble.Platform.Offline;
 namespace NetRumble.Platform.GameCore.Services;
 
 /// <summary>
-/// Adds a cloud tier to <see cref="LocalFileGameSaveService"/> using the GDK's connected
-/// storage - <c>XGameSave</c>, reached through GDK.Net's
-/// <see cref="GameSaveProvider"/> (XR-050, M10).
+/// Adds roaming saves through GDK.Net's <see cref="GameSaveFiles"/> wrapper.
+/// The platform synchronizes the returned folder; the title uses ordinary file I/O.
 /// </summary>
-/// <remarks>
-/// <para>
-/// <b>Why this rather than PlayFab user data.</b> The cloud tier used to be PlayFab
-/// user data, now accessed through GDK.Net's native wrappers - but it is
-/// not the save system XBOX certification is written against. Connected storage is what
-/// roams: the platform syncs a container between every device the account signs in on,
-/// resolves conflicts, survives the title being suspended mid-write, and is what the
-/// shell's own "syncing your saved data" UI is driven by. A title that stores progress
-/// in PlayFab user data instead looks to the platform like a title with no saved data at
-/// all.
-/// </para>
-/// <para>
-/// <b>One container, one blob per key.</b> The container is the unit the platform syncs
-/// and resolves conflicts on, so putting settings, achievement stats and match history
-/// in one container means they move as a set and cannot be restored half from one device
-/// and half from another. Splitting them would buy nothing: the whole set is smaller than
-/// a single blob's ceiling.
-/// </para>
-/// <para>
-/// <b>The local tier still exists and still comes first.</b> Settings and match history
-/// are read before sign-in completes, so the inherited local tier is what boots the
-/// front end; connected storage is the roaming copy on top. That layering is the base
-/// class's contract, not an extra this class invented.
-/// </para>
-/// <para>
-/// <b>Nothing here has been observed running.</b> Connected storage needs a signed-in
-/// account on a real device, and a desktop GDK will initialize a provider but has no
-/// second device to roam to. The code path is written against the API contract; see
-/// <c>docs/design-notes.md</c> for what still has to be proven on hardware.
-/// </para>
-/// </remarks>
 internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDisposable
 {
-    /// <summary>
-    /// The container every one of this title's blobs lives in.
-    /// </summary>
-    /// <remarks>
-    /// Container names are restricted to letters, digits, underscore, hyphen and period,
-    /// so this is deliberately plain. It is also permanent: renaming it in a later build
-    /// would orphan every existing player's saved data, because the platform keys the
-    /// roamed container on this string.
-    /// </remarks>
-    private const string ContainerName = "NetRumbleSave";
-
-    /// <summary>What the shell shows when it talks about this container.</summary>
-    private const string ContainerDisplayName = "NetRumble";
-
-    /// <summary>
-    /// Largest blob this title will write.
-    /// </summary>
-    /// <remarks>
-    /// Connected storage itself allows far more than this - blobs run to megabytes and a
-    /// container to hundreds of them - so the cap is not the platform's, it is a sanity
-    /// bound on a title whose entire save set is settings, ten achievement counters and a
-    /// short match history. A write larger than this is a bug in the caller, and failing
-    /// at the door with a diagnostic that says so beats filling a player's quota.
-    /// </remarks>
     public const int MaxCloudBytes = 256 * 1024;
 
     private readonly GameCoreRuntime _runtime;
     private readonly GameCoreIdentityService _identity;
-
-    private GameSaveProvider? _provider;
-    private User? _boundUser;
+    private readonly object _stateGate = new();
+    private readonly SemaphoreSlim _cloudGate = new(1, 1);
+    private readonly CancellationTokenSource _shutdown = new();
+    private CancellationTokenSource _sessionCancellation = new();
+    private User? _saveUser;
+    private SaveFolder? _folder;
+    private long _revision;
     private bool _disposed;
+    private bool _suspended;
 
-    /// <param name="runtime">The Gaming Runtime, for its pump dispatcher.</param>
-    /// <param name="identity">Lends the signed-in <see cref="User"/> the provider is bound to.</param>
-    /// <param name="root">The local save root. See the base class.</param>
-    /// <param name="currentUserId">
-    /// Scopes the local tier per account (XR-052). See the base class; this provider
-    /// passes the xuid rather than a PlayFab entity id, because connected storage is
-    /// keyed on the Xbox account and a save tier backed by it must not need a PlayFab
-    /// login to decide where a local file goes.
-    /// </param>
-    /// <param name="legacyUserId">
-    /// The key the previous backend scoped local files under, read on a miss so a build
-    /// that switches backends does not look to the player like a factory reset. See
-    /// <see cref="LocalFileGameSaveService"/>.
-    /// </param>
     internal GameCoreGameSaveService(
         GameCoreRuntime runtime,
         GameCoreIdentityService identity,
         string? root,
-        Func<string?> currentUserId,
-        Func<string?>? legacyUserId = null)
-        : base(root, currentUserId, legacyUserId)
+        Func<string?> currentUserId)
+        : base(root, currentUserId)
     {
         _runtime = runtime;
         _identity = identity;
+        _saveUser = identity.TryGetUser(out var user) ? user : null;
+        _identity.UserChanged += OnUserChanged;
+        _runtime.LifecycleChanged += OnLifecycleChanged;
     }
 
-    public override async Task<PlatformResult> SaveCloudAsync(
-        string key,
-        ReadOnlyMemory<byte> data,
-        CancellationToken cancellationToken = default)
-    {
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            return PlatformResult.Fail(
-                PlatformStatus.Failed,
-                "Could not save your data.",
-                "SaveCloudAsync called with an empty key.");
-        }
+    public override Task<PlatformResult> SaveCloudAsync(
+        string key, ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
+        => !_runtime.IsInitialized
+            ? Task.FromResult(PlatformResult.Unavailable("Sign in to Xbox to access roaming saves."))
+            : _runtime.Dispatcher.Marshal(SaveCloudWorkerAsync(key, data, cancellationToken));
 
+    private async Task<PlatformResult> SaveCloudWorkerAsync(
+        string key, ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
+    {
+        if (!IsValidCloudKey(key))
+        {
+            return InvalidKey<bool>().Result;
+        }
         if (data.Length > MaxCloudBytes)
         {
-            return PlatformResult.Fail(
-                PlatformStatus.Failed,
-                "That save is too large to store online.",
-                $"SaveCloudAsync got {data.Length} bytes for '{key}'; this title caps a " +
-                $"connected-storage blob at {MaxCloudBytes} bytes.");
+            return PlatformResult.Fail(PlatformStatus.Failed, "That save is too large to store online.",
+                $"SaveCloudAsync got {data.Length} bytes for '{key}'; this title caps a save file at {MaxCloudBytes} bytes.");
         }
-
-        if (!TryGetProvider(out var provider))
+        var bytes = data.ToArray();
+        var result = await WithFolderAsync(key, async (folder, token) =>
         {
-            return PlatformResult.Unavailable();
-        }
-
-        try
-        {
-            // The container handle and the update are both native resources with a
-            // defined lifetime, and an update that is never submitted is discarded - so
-            // a cancellation or a throw between CreateUpdate and Submit leaves nothing
-            // half-written, which is the property the write-then-move in the local tier
-            // is imitating.
-            using var container = provider.CreateContainer(ContainerName);
-            using var update = container.CreateUpdate(ContainerDisplayName);
-
-            update.Write(key, data.ToArray());
-
-            await _runtime.Dispatcher
-                .Marshal(update.SubmitAsync(cancellationToken))
-                .ConfigureAwait(false);
-
-            return PlatformResult.Ok();
-        }
-        catch (OperationCanceledException)
-        {
-            return PlatformResult.Canceled();
-        }
-        catch (GameRuntimeException ex)
-        {
-            CrashLog.MarkOnce(
-                $"gamesave-write-{key}",
-                $"gamesave: writing '{key}' to connected storage failed - {ex.Message}");
-
-            return PlatformResult.Fail(
-                PlatformStatus.Failed,
-                "Could not save your data online.",
-                ex.Message);
-        }
+            var directory = folder.Path;
+            var path = Path.Combine(directory, key);
+            var temp = Path.Combine(directory, $"nr-{Guid.NewGuid():N}.tmp");
+            try
+            {
+                Directory.CreateDirectory(directory);
+                await File.WriteAllBytesAsync(temp, bytes, token).ConfigureAwait(false);
+                lock (_stateGate)
+                {
+                    CheckCurrent(folder.User, folder.Revision, token);
+                    File.Move(temp, path, overwrite: true);
+                }
+                return true;
+            }
+            finally
+            {
+                try
+                {
+                    File.Delete(temp);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    CrashLog.Mark($"gamesave: temporary save cleanup failed: {ex.Message}");
+                }
+            }
+        }, cancellationToken).ConfigureAwait(false);
+        return result.Result;
     }
 
-    public override async Task<PlatformResult<byte[]>> LoadCloudAsync(
-        string key,
-        CancellationToken cancellationToken = default)
+    public override Task<PlatformResult<byte[]>> LoadCloudAsync(
+        string key, CancellationToken cancellationToken = default)
+        => !_runtime.IsInitialized
+            ? Task.FromResult(PlatformResult<byte[]>.Unavailable("Sign in to Xbox to access roaming saves."))
+            : _runtime.Dispatcher.Marshal(LoadCloudWorkerAsync(key, cancellationToken));
+
+    private Task<PlatformResult<byte[]>> LoadCloudWorkerAsync(
+        string key, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(key))
+        if (!IsValidCloudKey(key))
         {
-            return PlatformResult<byte[]>.Fail(
-                PlatformStatus.Failed,
-                "Could not read your saved data.",
-                "LoadCloudAsync called with an empty key.");
+            return Task.FromResult(InvalidKey<byte[]>());
         }
-
-        if (!TryGetProvider(out var provider))
+        return WithFolderAsync(key, async (folder, token) =>
         {
-            return PlatformResult<byte[]>.Unavailable();
-        }
+            try
+            {
+                await using var stream = new FileStream(Path.Combine(folder.Path, key),
+                    FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
+                if (stream.Length > MaxCloudBytes)
+                {
+                    throw new InvalidDataException($"Save '{key}' exceeds the {MaxCloudBytes}-byte limit.");
+                }
+                var bytes = new byte[checked((int)stream.Length)];
+                await stream.ReadExactlyAsync(bytes, token).ConfigureAwait(false);
+                return bytes;
+            }
+            catch (FileNotFoundException)
+            {
+                return [];
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return [];
+            }
+        }, cancellationToken);
+    }
 
+    private async Task<PlatformResult<T>> WithFolderAsync<T>(
+        string key, Func<SaveFolder, CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        using var lifetime = CreateLifetime(cancellationToken);
+        var token = lifetime.Token;
+        var entered = false;
         try
         {
-            using var container = provider.CreateContainer(ContainerName);
-
-            // Asking for a blob that is not there is an error at this API, not an empty
-            // read, so the enumeration is what makes "this player has never saved" the
-            // non-event it has to be: first run must not report a failure.
-            var present = container
-                .EnumerateBlobs()
-                .Any(b => string.Equals(b.Name, key, StringComparison.Ordinal));
-
-            if (!present)
+            token.ThrowIfCancellationRequested();
+            User user;
+            long revision;
+            lock (_stateGate)
             {
-                return PlatformResult<byte[]>.Ok([]);
+                if (_disposed || _suspended || !_runtime.IsInitialized || !_identity.TryGetUser(out user))
+                {
+                    return PlatformResult<T>.Unavailable("Sign in to Xbox to access roaming saves.");
+                }
+                revision = _revision;
+            }
+            await _cloudGate.WaitAsync(token).ConfigureAwait(false);
+            entered = true;
+            SaveFolder? folder;
+            lock (_stateGate)
+            {
+                CheckCurrent(user, revision, token);
+                folder = _folder;
             }
 
-            var blobs = await _runtime.Dispatcher
-                .Marshal(container.ReadBlobsAsync([key], cancellationToken))
-                .ConfigureAwait(false);
-
-            var blob = blobs.FirstOrDefault(b => string.Equals(b.Name, key, StringComparison.Ordinal));
-
-            return PlatformResult<byte[]>.Ok(blob?.Data ?? []);
+            if (folder is null || folder.Revision != revision || !ReferenceEquals(folder.User, user))
+            {
+                using var heldUser = user.Duplicate();
+                var configuration = XboxServicesConfiguration.Resolve(
+                    GameLauncher.GetXboxTitleId(), Environment.GetCommandLineArgs());
+                var path = await GameSaveFiles.GetFolderWithUiAsync(
+                    heldUser, configuration.Scid, token).ConfigureAwait(false);
+                if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))
+                {
+                    throw new InvalidOperationException("XGameSaveFiles returned an invalid save folder.");
+                }
+                folder = new SaveFolder(user, revision, path);
+                lock (_stateGate)
+                {
+                    CheckCurrent(user, revision, token);
+                    _folder = folder;
+                }
+                CrashLog.Mark($"gamesave: XGameSaveFiles initialized on SCID {configuration.Scid} from {configuration.Source}");
+            }
+            var value = await operation(folder, token).ConfigureAwait(false);
+            lock (_stateGate)
+            {
+                CheckCurrent(user, revision, token);
+            }
+            return PlatformResult<T>.Ok(value);
         }
         catch (OperationCanceledException)
         {
-            return PlatformResult<byte[]>.Canceled();
+            return PlatformResult<T>.Canceled();
         }
-        catch (GameRuntimeException ex)
+        catch (GameRuntimeException ex) when (ex.HResult == HResult.EGsUserCanceled)
         {
-            CrashLog.MarkOnce(
-                $"gamesave-read-{key}",
-                $"gamesave: reading '{key}' from connected storage failed - {ex.Message}");
-
-            return PlatformResult<byte[]>.Fail(
-                PlatformStatus.Failed,
-                "Could not read your saved data.",
-                ex.Message);
+            return PlatformResult<T>.Canceled();
+        }
+        catch (Exception ex) when (ex is GameRuntimeException or IOException or InvalidDataException or UnauthorizedAccessException
+            or InvalidOperationException or DllNotFoundException or EntryPointNotFoundException
+            or PlatformNotSupportedException)
+        {
+            CrashLog.Mark($"gamesave: XGameSaveFiles operation '{key}' failed: {ex.Message}");
+            var status = ex is DllNotFoundException or EntryPointNotFoundException or PlatformNotSupportedException
+                ? PlatformStatus.Unavailable : PlatformStatus.Failed;
+            return PlatformResult<T>.Fail(status, "Could not access your saved data.", ex.Message);
+        }
+        finally
+        {
+            if (entered)
+            {
+                _cloudGate.Release();
+            }
         }
     }
 
-    /// <summary>
-    /// Lends a provider bound to the signed-in user, creating one on first use and
-    /// replacing it when the account changes.
-    /// </summary>
-    /// <remarks>
-    /// Bound per user for the same reason <see cref="GameCoreXblContext"/> binds its
-    /// context per user: a provider is the storage space of one account, and keeping a
-    /// previous account's provider alive across a sign-out would write one player's
-    /// progress into another player's roamed container - the XR-052 failure, in the one
-    /// place where it would also be replicated to every device that account owns.
-    /// </remarks>
-    private bool TryGetProvider(out GameSaveProvider provider)
+    private void CheckCurrent(User user, long revision, CancellationToken token)
     {
-        provider = null!;
-
-        if (_disposed || !_runtime.IsInitialized)
+        token.ThrowIfCancellationRequested();
+        if (_disposed || _suspended || revision != _revision || !_identity.TryGetUser(out var current)
+            || !ReferenceEquals(current, user))
         {
-            return false;
-        }
-
-        if (!_identity.TryGetUser(out var user))
-        {
-            ReleaseProvider();
-            return false;
-        }
-
-        if (_provider is not null && ReferenceEquals(_boundUser, user))
-        {
-            provider = _provider;
-            return true;
-        }
-
-        ReleaseProvider();
-
-        try
-        {
-            var titleId = GameLauncher.GetXboxTitleId();
-            var configuration = XboxServicesConfiguration.Resolve(
-                titleId, Environment.GetCommandLineArgs());
-
-            // Synchronous rather than the async overload: this runs behind a save or load
-            // that is already off the game thread, and the initialize is what every
-            // subsequent call on this provider depends on, so there is nothing useful to
-            // overlap it with. syncOnDemand stays false - the platform syncs the
-            // container up front, which is what makes the first read after a device
-            // change return that other device's data rather than this one's stale copy.
-            _provider = GameSaveProvider.Initialize(
-                user, configuration.Scid, syncOnDemand: false);
-
-            _boundUser = user;
-            provider = _provider;
-
-            CrashLog.MarkOnce(
-                "gamesave-provider",
-                $"gamesave: connected storage initialized on SCID {configuration.Scid} " +
-                $"from {configuration.Source}");
-
-            return true;
-        }
-        catch (Exception ex) when (ex is GameRuntimeException
-                                      or InvalidOperationException
-                                      or DllNotFoundException
-                                      or EntryPointNotFoundException)
-        {
-            // XR-055: a wrong SCID fails here rather than at the first write, which is
-            // the better of the two - but only if somebody is told, because the cloud
-            // tier degrades to "unavailable" and the local tier carries on working, so
-            // nothing the player sees would otherwise change.
-            CrashLog.MarkOnce(
-                "gamesave-provider",
-                $"gamesave: connected storage is unavailable - {ex.Message}");
-
-            return false;
+            throw new OperationCanceledException("The signed-in account or save session changed.");
         }
     }
 
-    private void ReleaseProvider()
+    private void OnUserChanged(PlatformUser? _)
     {
-        _provider?.Dispose();
-        _provider = null;
-        _boundUser = null;
+        lock (_stateGate)
+        {
+            _identity.TryGetUser(out var current);
+            if (_disposed || ReferenceEquals(_saveUser, current))
+            {
+                return;
+            }
+            _saveUser = current;
+            InvalidateFolder();
+        }
     }
+
+    private void OnLifecycleChanged(PlatformLifecycleEvent change)
+    {
+        if (change is PlatformLifecycleEvent.Suspending or PlatformLifecycleEvent.Resumed)
+        {
+            lock (_stateGate)
+            {
+                _suspended = change == PlatformLifecycleEvent.Suspending;
+                InvalidateFolder();
+            }
+        }
+    }
+
+    private void InvalidateFolder()
+    {
+        lock (_stateGate)
+        {
+            _revision++;
+            _folder = null;
+            _sessionCancellation.Cancel();
+            _sessionCancellation.Dispose();
+            _sessionCancellation = new CancellationTokenSource();
+        }
+    }
+
+    private CancellationTokenSource CreateLifetime(CancellationToken cancellationToken)
+    {
+        lock (_stateGate)
+        {
+            return CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken, _shutdown.Token, _sessionCancellation.Token);
+        }
+    }
+
+    internal static bool IsValidCloudKey(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key) || key.Length > 65 || key is "." or ".."
+            || key.EndsWith('.') || key.EndsWith(' ') || key.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            return false;
+        }
+        var stem = key.Split('.')[0];
+        return !new[] { "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5",
+            "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5",
+            "LPT6", "LPT7", "LPT8", "LPT9" }.Contains(stem, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static PlatformResult<T> InvalidKey<T>()
+        => PlatformResult<T>.Fail(PlatformStatus.Failed, "Could not access your saved data.",
+            "Save keys must be valid Windows file names of at most 65 characters.");
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_stateGate)
         {
-            return;
+            if (_disposed)
+            {
+                return;
+            }
+            _disposed = true;
+            _revision++;
+            _folder = null;
+            _sessionCancellation.Cancel();
         }
-
-        _disposed = true;
-        ReleaseProvider();
+        _identity.UserChanged -= OnUserChanged;
+        _runtime.LifecycleChanged -= OnLifecycleChanged;
+        _shutdown.Cancel();
     }
+
+    internal async Task ShutdownAsync()
+    {
+        Dispose();
+        await _cloudGate.WaitAsync().ConfigureAwait(false);
+        _cloudGate.Release();
+    }
+
+    private sealed record SaveFolder(User User, long Revision, string Path);
 }

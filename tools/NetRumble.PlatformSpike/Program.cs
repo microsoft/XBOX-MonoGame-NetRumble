@@ -12,6 +12,10 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args.Contains("--gamesave-files-checks-only", StringComparer.OrdinalIgnoreCase))
+        {
+            return await GameSaveFilesChecks.Run().ConfigureAwait(false);
+        }
         if (args.Contains("--playfab-checks-only", StringComparer.OrdinalIgnoreCase))
         {
             return await PlayFabChecks.Run().ConfigureAwait(false);
@@ -23,8 +27,8 @@ internal static class Program
         var mode = PlatformProviderFactory.ResolveMode(args);
 
         // Resolved from --playfab-title=<id> or NETRUMBLE_PLAYFAB_TITLE_ID. With a real
-        // id the provider gains PlayFab cloud save and an entity id; with
-        // the placeholder it is left untouched, which is the normal state of a dev box.
+        // id GameCore gains PlayFab Party/Lobby; other providers gain PlayFab cloud
+        // save and an entity id through the developer decorator.
         var playFab = PlayFabConfiguration.Resolve(args);
 
         Console.WriteLine("NetRumble platform spike");
@@ -60,6 +64,10 @@ internal static class Program
         await GameCorePartyAndActivityChecks.Run(mode).ConfigureAwait(false);
         await LanTransportChecks.Run().ConfigureAwait(false);
         await PlayFabChecks.Run().ConfigureAwait(false);
+        if (await GameSaveFilesChecks.Run().ConfigureAwait(false) != 0)
+        {
+            return 1;
+        }
         FontCoverageChecks.Run();
         await IdentityChecks.Run().ConfigureAwait(false);
         MatchEndChecks.Run();
