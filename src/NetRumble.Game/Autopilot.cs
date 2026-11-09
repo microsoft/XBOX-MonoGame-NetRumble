@@ -30,7 +30,7 @@ internal enum AutopilotRole
 /// services, codecs, reliability and replication, none of which ever ran the game. That
 /// leaves the largest untested surface in the project - whether the pieces compose into
 /// something playable - resting on the fact that each piece passes on its own. This is
-/// what closes that gap: two processes, a real UDP transport between them, the real
+/// what closes that gap: two processes, the platform transport between them, the real
 /// screens, the real match loop, and no human.
 /// </para>
 /// <para>
@@ -110,6 +110,7 @@ internal sealed class Autopilot
     private float _playStarted;
     private int _peers;
     private bool _readySent;
+    private bool _signInRequested;
     private bool _failed;
 
     private int _remotePeerId;
@@ -163,10 +164,8 @@ internal sealed class Autopilot
     /// </summary>
     /// <remarks>
     /// <c>--autopilot=host</c> or <c>--autopilot=join</c>. The two instances find each
-    /// other through a rendezvous file rather than a hard-coded port: the host writes the
-    /// connection string its transport actually bound, and the client waits for it. That
-    /// avoids the classic flake where a fixed port is occupied and the client connects to
-    /// something else entirely.
+    /// other through a rendezvous file: the host writes its platform connection string,
+    /// and the client waits for it.
     /// </remarks>
     public static Autopilot? FromCommandLine(IReadOnlyList<string> args)
     {
@@ -276,28 +275,30 @@ internal sealed class Autopilot
     // --- Stages ------------------------------------------------------------
 
     /// <summary>
-    /// Skips the acquire-user screen.
+    /// Waits for the normal sign-in screen to hand off to the menu.
     /// </summary>
     /// <remarks>
-    /// Going straight to the main menu is the same thing that screen's "Continue Offline"
-    /// button does. There is no account to sign in to on a dev box, and waiting for a
-    /// sign-in that cannot succeed would burn the whole run in the first screen.
+    /// Unattended runs obey the same account requirement as player-driven runs.
     /// </remarks>
     private void Booting(UiContext context)
     {
-        // A short settle first: the acquire-user screen kicks off a silent sign-in on
-        // load, and replacing it mid-flight would tear down a task still running.
-        if (_elapsed < 2f)
+        if (!_signInRequested && context.Game.PlatformSettled
+            && context.Screens.Current is AcquireUserScreen acquireUser)
         {
+            _signInRequested = true;
+            acquireUser.BeginSignIn(context);
+        }
+
+        if (context.Screens.Current is not MainMenuScreen || context.Platform.Identity.CurrentUser is null)
+        {
+            if (_elapsed >= PeerTimeout.TotalSeconds)
+            {
+                Fail("GDK sign-in did not reach the main menu.");
+            }
             return;
         }
 
         Log($"role={_role} transport={context.Platform.Name}");
-
-        if (context.Screens.Current is not MainMenuScreen)
-        {
-            context.Screens.ReplaceAll(new MainMenuScreen());
-        }
 
         Enter(Stage.Menu);
     }
@@ -345,8 +346,7 @@ internal sealed class Autopilot
 
         Log($"joining {connectionString}");
 
-        // The invite constructor, reused exactly. A LAN connection string is joinable in
-        // the same way an invite's is, so the client needs no join-code UI at all.
+        // Reuse the invite constructor so the client needs no join-code UI.
         context.Screens.Push(new LobbyScreen(LobbyIntent.Join, connectionString));
         Enter(Stage.Lobby);
     }

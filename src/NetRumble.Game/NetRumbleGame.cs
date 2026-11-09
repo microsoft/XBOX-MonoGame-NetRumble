@@ -44,7 +44,6 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
 
     private readonly GraphicsDeviceManager _graphics;
     private readonly IPlatformProvider _platform;
-    private readonly string[] _commandLineArgs;
     private readonly string? _localDataRoot;
 
     /// <summary>
@@ -104,11 +103,8 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
         // GameThreadContext for what that was costing.
         _mainThread = GameThreadContext.Install();
 
-        _commandLineArgs = args;
-
-        // XR-003: the three debug switches below are compiled out of release builds, the
-        // same way ResolveUserToken compiles out the developer sign-in token. Autopilot's
-        // own remarks say "nothing here should ever be reachable in a shipping build" -
+        // XR-003: the three debug switches below are compiled out of release builds.
+        // Autopilot must not be reachable in a shipping build -
         // it force-quits the process when its run ends - and a packaged PC title launched
         // through its execution alias does receive command-line arguments, so leaving the
         // parse in a retail build means shipping that switch to players.
@@ -171,7 +167,7 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
 
     /// <summary>True once the platform has reported a final state, good or bad.</summary>
     public bool PlatformSettled
-        => _bootState is PlatformBootState.Ready or PlatformBootState.Degraded or PlatformBootState.Failed;
+        => _bootState is PlatformBootState.Ready or PlatformBootState.Failed;
 
     /// <summary>True when the platform initialised cleanly.</summary>
     public bool PlatformReady => _bootState == PlatformBootState.Ready;
@@ -229,9 +225,7 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
 
         _audio = new AudioManager(_assets, _random);
 
-        var userToken = ResolveUserToken();
-
-        _profile = new PlayerProfile(userToken, _localDataRoot);
+        _profile = new PlayerProfile(_localDataRoot);
         _profile.AttachAudio(_audio);
         _profile.Load();
         ApplyDisplaySettings();
@@ -268,7 +262,6 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
             Pixel = _pixel,
             Game = this,
             Random = _random,
-            DeveloperCustomId = userToken,
         };
 
         _screens.Context = _context;
@@ -302,49 +295,8 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
         Activated += (_, _) => _lifecycle.SetConstrained(false);
         Deactivated += (_, _) => _lifecycle.SetConstrained(true);
 
-        // Boot flow from main.gd: the acquire-user screen gates the *menu*, not the game -
-        // it offers "Continue Offline" for players who cannot or will not sign in.
+        // No front-end or gameplay screen is available before GDK sign-in.
         _screens.Push(new AcquireUserScreen());
-    }
-
-    /// <summary>
-    /// Reads the developer identity override used by the local multi-instance Party test
-    /// path, from <c>--pf-user=&lt;name&gt;</c> or the <c>PF_CUSTOM_ID</c> environment
-    /// variable.
-    /// </summary>
-    /// <remarks>
-    /// This does two jobs, and for a long time only did the first. It gives each instance
-    /// its own settings file, so two clients on one PC do not share and overwrite each
-    /// other's appearance; and it becomes <see cref="SignInOptions.DeveloperCustomId"/>,
-    /// which is what actually gives the instance a distinct identity. Without the second,
-    /// every instance signs in as "Player" - indistinguishable in the roster, the
-    /// scoreboard and the standings - and the PlayFab custom-id sign-in path declines to
-    /// run at all, because it requires a non-empty id.
-    /// </remarks>
-    private string? ResolveUserToken()
-    {
-#if DEBUG
-        const string Prefix = "--pf-user=";
-
-        foreach (var arg in _commandLineArgs)
-        {
-            if (arg.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return arg[Prefix.Length..];
-            }
-        }
-
-        var environment = Environment.GetEnvironmentVariable("PF_CUSTOM_ID");
-
-        return string.IsNullOrWhiteSpace(environment) ? null : environment;
-#else
-        // XR-013: LoginWithCustomID authenticates nobody - anyone who guesses the
-        // string owns the account. The multi-instance local test path this token also
-        // names settings files for has no reason to exist in a shipping build, so the
-        // whole path - not just the PlayFab call it eventually reaches - is compiled
-        // out here rather than relying on downstream composition to leave it unreachable.
-        return null;
-#endif
     }
 
     /// <summary>
@@ -468,6 +420,12 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
             _context.Delta = delta;
             _context.Time = (float)gameTime.TotalGameTime.TotalSeconds;
             _context.Screen = new Rectangle(0, 0, DesignWidth, DesignHeight);
+
+            if (_platform.Identity.CurrentUser is null && _screens.Find<AcquireUserScreen>() is null)
+            {
+                _screens.ReplaceAll(new AcquireUserScreen());
+            }
+
             _screens.Update(_context);
 
             // After the screens, so a held invite sees the stack they just produced -
@@ -555,13 +513,7 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
                 return;
             }
 
-            // A missing native runtime is a supported configuration, not a failure: the
-            // front end and offline play still work. Distinguish the two so the UI can say
-            // something accurate.
-            _bootState = _platform.Runtime.IsRuntimeAvailable
-                ? PlatformBootState.Failed
-                : PlatformBootState.Degraded;
-
+            _bootState = PlatformBootState.Failed;
             _bootDetail = result.Message ?? string.Empty;
         }
         catch (Exception ex)
@@ -672,7 +624,6 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
         NotStarted,
         Starting,
         Ready,
-        Degraded,
         Failed,
     }
 }

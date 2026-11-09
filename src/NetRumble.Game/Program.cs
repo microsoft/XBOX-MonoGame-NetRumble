@@ -30,9 +30,7 @@ internal static partial class Program
 
         try
         {
-            // The provider is chosen here and nowhere else. Pass a "platform=" switch to
-            // force one; by default the GDK is used when genuinely installed and the
-            // offline provider otherwise.
+            // Both the default and explicit GameCore mode require the GDK provider.
             var mode = PlatformProviderFactory.ResolveMode(args);
 
             CrashLog.Mark($"boot: platform mode {mode}");

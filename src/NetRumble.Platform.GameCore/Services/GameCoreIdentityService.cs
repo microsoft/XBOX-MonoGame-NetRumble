@@ -5,7 +5,7 @@ using NetRumble.Platform.Diagnostics;
 namespace NetRumble.Platform.GameCore.Services;
 
 /// <summary>
-/// GDK-backed sign-in implementing the check to silent to UI fallback chain.
+/// GDK-backed sign-in for the simplified user model's single default user.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -73,7 +73,7 @@ internal sealed class GameCoreIdentityService : IIdentityService
         _signInInProgress = true;
         try
         {
-            return await RunSignInAsync(options, cancellationToken).ConfigureAwait(false);
+            return await RunSignInAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -92,37 +92,25 @@ internal sealed class GameCoreIdentityService : IIdentityService
     }
 
     private async Task<PlatformResult<PlatformUser>> RunSignInAsync(
-        SignInOptions options,
         CancellationToken cancellationToken)
     {
         SetStage("Signing in to Xbox");
 
         HookAccountNotifications();
 
-        // Silent first, so a returning player never sees an account picker.
-        var user = await TryAddUserAsync(
-            UserAddOptions.AddDefaultUserSilently,
-            cancellationToken).ConfigureAwait(false);
-
-        if (user is null && options.AllowUserInterface)
-        {
-            SetStage("Waiting for the account picker");
-            user = await TryAddUserAsync(
-                UserAddOptions.AddDefaultUserAllowingUI,
-                cancellationToken).ConfigureAwait(false);
-        }
+        var user = await TryAddDefaultUserAsync(cancellationToken).ConfigureAwait(false);
 
         if (user is null)
         {
             SetStage(string.Empty);
             return PlatformResult<PlatformUser>.Fail(
                 PlatformStatus.NotSignedIn,
-                "No Xbox account is signed in.");
+                "No default Xbox account is available. Sign in through the system and relaunch the game.");
         }
 
         SetStage("Reading your profile");
 
-        var result = Adopt(user, notify: false);
+        var result = Adopt(user);
         if (result.Succeeded)
         {
             _pendingUserNotification = true;
@@ -199,22 +187,9 @@ internal sealed class GameCoreIdentityService : IIdentityService
     }
 
     /// <summary>
-    /// Adopts a user obtained by another service - specifically
-    /// <see cref="GameCorePlatformUiService.ShowAccountPickerAsync"/>, which must issue
-    /// its own add with the UI-allowed option: silently re-running
-    /// <see cref="SignInAsync"/> never shows the picker for an already-signed-in user,
-    /// since its own silent attempt succeeds first and short-circuits the UI branch.
-    /// Reusing that method here would either duplicate the read-user/replace logic or
-    /// need a second public entry point on <see cref="IIdentityService"/> for something
-    /// that is really an implementation detail of one provider, so this stays
-    /// <c>internal</c> instead.
+    /// Holds the default user for sign-in. Notification follows the PlayFab step.
     /// </summary>
-    /// <param name="notify">
-    /// Whether to raise <see cref="UserChanged"/> here. <see cref="SignInAsync"/> passes
-    /// false and raises it itself once the PlayFab half has been added, so no listener
-    /// ever sees a user that is signed in to Xbox but not yet able to play online.
-    /// </param>
-    internal PlatformResult<PlatformUser> Adopt(User user, bool notify = true)
+    private PlatformResult<PlatformUser> Adopt(User user)
     {
         try
         {
@@ -223,16 +198,6 @@ internal sealed class GameCoreIdentityService : IIdentityService
             ReleaseUser();
             _user = user;
             CurrentUser = platformUser;
-
-            if (notify)
-            {
-                UserChanged?.Invoke(platformUser);
-
-                // An account adopted outside the sign-in chain - the picker - still needs
-                // the PlayFab half, or online play would refuse for the newly picked
-                // account until the title was restarted.
-                BeginPlayFabRefresh(user);
-            }
 
             return PlatformResult<PlatformUser>.Ok(platformUser);
         }
@@ -251,16 +216,14 @@ internal sealed class GameCoreIdentityService : IIdentityService
     /// simply is not there - the silent attempt failing is the expected path, not an
     /// error.
     /// </summary>
-    private async Task<User?> TryAddUserAsync(
-        UserAddOptions options,
-        CancellationToken cancellationToken)
+    private async Task<User?> TryAddDefaultUserAsync(CancellationToken cancellationToken)
     {
         var users = _runtime.Runtime!.Users;
 
         try
         {
             return await _runtime.Dispatcher
-                .Marshal(users.AddAsync(options, cancellationToken))
+                .Marshal(users.AddAsync(UserAddOptions.AddDefaultUserSilently, cancellationToken))
                 .ConfigureAwait(false);
         }
         catch (GameRuntimeException)
@@ -471,7 +434,7 @@ internal sealed class GameCoreIdentityService : IIdentityService
     /// <remarks>
     /// Raises no event of its own. Callers own the notification, because the point of
     /// this step is that the user is not finished until it has run - see
-    /// <see cref="SignInAsync"/> and <see cref="BeginPlayFabRefresh"/>.
+    /// <see cref="SignInAsync"/> and <see cref="RetryPlayFabIdentityAsync"/>.
     /// </remarks>
     private async Task PopulatePlayFabIdentityAsync(User user, CancellationToken cancellationToken)
     {
@@ -559,45 +522,6 @@ internal sealed class GameCoreIdentityService : IIdentityService
         if (ReferenceEquals(_user, user) && _online.IsSignedIn)
         {
             UserChanged?.Invoke(CurrentUser);
-        }
-    }
-
-    /// <summary>
-    /// Runs the PlayFab step for a user adopted outside <see cref="SignInAsync"/>, then
-    /// raises <see cref="UserChanged"/> a second time with the completed user.
-    /// </summary>
-    /// <remarks>
-    /// Not awaited: the picker's caller is a UI action that has already done its job once
-    /// the Xbox account changed, and blocking it on a network round trip would leave the
-    /// picker up. <see cref="IsSignInInProgress"/> stays true for the duration so that an
-    /// invite arriving in the middle waits for the entity id rather than racing it.
-    /// </remarks>
-    private void BeginPlayFabRefresh(User user)
-    {
-        if (_online is null || !_online.CanAttemptLogin)
-        {
-            return;
-        }
-
-        _signInInProgress = true;
-        _ = RefreshAsync();
-
-        async Task RefreshAsync()
-        {
-            try
-            {
-                await PopulatePlayFabIdentityAsync(user, CancellationToken.None).ConfigureAwait(false);
-            }
-            finally
-            {
-                _signInInProgress = false;
-                SetStage(string.Empty);
-
-                if (ReferenceEquals(_user, user))
-                {
-                    UserChanged?.Invoke(CurrentUser);
-                }
-            }
         }
     }
 

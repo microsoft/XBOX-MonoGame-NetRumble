@@ -114,8 +114,7 @@ public sealed class LobbyScreen : Screen
     /// one does: a join code whose lobby row outlived its host resolves happily and then
     /// blocks on a Party handshake with nobody to answer it, leaving the player on the
     /// connecting screen with no timeout and no error. Cancelling here rather than in
-    /// one backend gives every provider the same guarantee - the LAN transport already
-    /// enforces a shorter deadline of its own, which simply wins.
+    /// one backend gives every provider the same guarantee.
     /// </remarks>
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(30);
 
@@ -829,7 +828,7 @@ public sealed class LobbyScreen : Screen
 
         if (user is null)
         {
-            var signIn = await identity.SignInAsync(context.InteractiveSignIn);
+            var signIn = await identity.SignInAsync(SignInOptions.Interactive);
 
             if (!signIn.Succeeded)
             {

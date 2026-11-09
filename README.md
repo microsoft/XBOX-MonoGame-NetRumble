@@ -71,7 +71,7 @@ moderation, achievements, rich presence, invites from the guide, roaming cloud s
 process lifecycle and controller detection.
 
 [Feature support](docs/feature-support.md) lists every feature against every environment,
-including the LAN and offline paths that need no GDK at all.
+on PC and XBOX Series X|S. Both require the GDK and XBOX sign-in.
 
 > [!NOTE]
 > This sample is still being built and some things are missing or broken. The controller
@@ -85,10 +85,8 @@ including the LAN and offline paths that need no GDK at all.
 Program.cs                      Resolves the provider mode, then constructs the game
 NetRumbleGame                   MonoGame Game: pumps the platform once per frame, owns the screen stack
 IPlatformProvider               The only platform surface the game can see
-  |- ...GameCore                XBOX GDK.NET: identity, Party, privileges, privacy, moderation, achievements
-  |- ...PlayFab                 Lobby discovery, the authentication exchange, cloud save
-  |- ...Lan                     A UDP transport with no GDK, title or account
-  \- ...Offline                 A complete local and no-op fallback, always the last resort
+  |- ...GameCore                XBOX GDK.NET: identity, Party, privileges, privacy, moderation, achievements, cloud save
+  \- ...PlayFab                 Lobby discovery and the authentication exchange
 MatchSession -> IMatchNetwork   Session, authoritative simulation and the wire codec
 LifecycleCoordinator            Suspend, resume, constrain, account change, durable commit
 InviteRouter                    Buffers platform activations until identity and the front end are ready
@@ -131,10 +129,9 @@ New to the GDK or PlayFab? Start with the
 > title, which requires an XBOX publishing relationship and a test account from that
 > sandbox.
 >
-> Without that access you can still clone, build and play Practice, or run real netcode
-> between two processes over the **LAN** transport, which needs no GDK and no account at
-> all. Join the [XBOX Developer Program](https://developer.microsoft.com/en-us/games/) to
-> get started.
+> You can clone and build the source without title access, but entering the game,
+> including Practice, requires GDK sign-in. Join the
+> [XBOX Developer Program](https://developer.microsoft.com/en-us/games/) to get started.
 
 ## Contributing
 
