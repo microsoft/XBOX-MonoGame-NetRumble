@@ -31,7 +31,7 @@
         not system components: nothing installs them machine-wide, and inside the package
         sandbox only what the layout carries is loadable. Without them the title installs
         and runs but PartyRuntimeProbe and XblRuntimeProbe report unavailable and the
-        game degrades to offline - a packaged build that silently loses multiplayer.
+        game cannot sign in or use the affected multiplayer services.
       * xgameruntime.thunks.dll already arrives in the publish output;
         NetRumble.Platform.GameCore copies it out of the installed GDK. It is verified
         here rather than copied again, because a layout missing it has no Gaming Runtime
@@ -139,7 +139,7 @@ if (-not (Test-Path (Join-Path $layout 'Content'))) {
 # warns when the GDK is absent; that warning is a hard failure once a package is the
 # goal, because the packaged title has no other Gaming Runtime to fall back on.
 if (-not (Test-Path (Join-Path $layout 'xgameruntime.thunks.dll'))) {
-    throw 'xgameruntime.thunks.dll is not in the publish output, so this build has no Gaming Runtime and would package a permanently offline title. Install the Microsoft GDK, or set GameRuntimeThunks to a copy of it, and rebuild.'
+    throw 'xgameruntime.thunks.dll is not in the publish output, so this build has no Gaming Runtime and cannot pass the required GDK sign-in. Install the Microsoft GDK, or set GameRuntimeThunks to a copy of it, and rebuild.'
 }
 
 # Store logos. These are shipping package assets, so silently replacing missing art with
@@ -200,11 +200,9 @@ foreach ($redist in $redists) {
 }
 
 if ($missing.Count -gt 0) {
-    # A warning rather than an error, matching how the rest of the port treats an absent
-    # GDK: the offline provider is complete, so the package still installs and plays a
-    # practice match. It just cannot sign in or host a match, which is not something to
-    # discover after installing it.
-    Write-Warning "These redistributables were not found and are not in the layout: $($missing -join ', '). The packaged title will degrade to offline. Install the Microsoft GDK and rerun."
+    # Missing optional service dependencies are reflected in the provider's capabilities.
+    # Report them before deployment rather than discovering disabled features at runtime.
+    Write-Warning "These redistributables were not found and are not in the layout: $($missing -join ', '). GDK sign-in or the affected online services may be unavailable. Install the Microsoft GDK and rerun."
 }
 
 Write-Host ''

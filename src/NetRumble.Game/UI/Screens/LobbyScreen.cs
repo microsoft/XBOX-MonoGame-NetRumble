@@ -114,8 +114,7 @@ public sealed class LobbyScreen : Screen
     /// one does: a join code whose lobby row outlived its host resolves happily and then
     /// blocks on a Party handshake with nobody to answer it, leaving the player on the
     /// connecting screen with no timeout and no error. Cancelling here rather than in
-    /// one backend gives every provider the same guarantee - the LAN transport already
-    /// enforces a shorter deadline of its own, which simply wins.
+    /// one backend gives every provider the same guarantee.
     /// </remarks>
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(30);
 
@@ -829,7 +828,7 @@ public sealed class LobbyScreen : Screen
 
         if (user is null)
         {
-            var signIn = await identity.SignInAsync(context.InteractiveSignIn);
+            var signIn = await identity.SignInAsync(SignInOptions.Interactive);
 
             if (!signIn.Succeeded)
             {
@@ -847,7 +846,12 @@ public sealed class LobbyScreen : Screen
         // revoked, or resolved, in between. useCache:false forces a live query at the
         // one point that matters: immediately before HostAsync/JoinAsync actually stands
         // up the session.
-        var verdict = await context.Platform.Privileges.CheckAsync(GamePrivilege.Multiplayer, useCache: false);
+        var verdict = await context.Platform.Privileges.EnsureAsync(GamePrivilege.Multiplayer);
+
+        if (_transitioning || context.Screens.Find<LobbyScreen>() != this)
+        {
+            return;
+        }
 
         if (!verdict.Allowed)
         {
@@ -995,6 +999,7 @@ public sealed class LobbyScreen : Screen
         {
             PlatformStatus.NetworkFailure => "The connection was lost. Check your network and try again.",
             PlatformStatus.TimedOut => "The match did not respond in time.",
+            PlatformStatus.SessionNotJoinable => "This match is full or no longer accepts players.",
             PlatformStatus.NotSignedIn => "Online play needs you to be signed in to Xbox.",
             PlatformStatus.NoPrivilege => "This account is not allowed to play online multiplayer.",
             PlatformStatus.Unavailable => "Online play is unavailable right now.",

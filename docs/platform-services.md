@@ -11,16 +11,15 @@ explain the decisions behind it.
 | Integration | Source |
 |---|---|
 | GDK sign-in and the exchange for a PlayFab identity | `src/NetRumble.Platform.GameCore/Services/GameCoreIdentityService.cs`, `src/NetRumble.Platform.PlayFab/PlayFabOnlineServices.cs` |
-| Sign-in progress screen and offline fallback | `src/NetRumble.Game/UI/Screens/AcquireUserScreen.cs` |
+| Required sign-in and progress screen | `src/NetRumble.Game/UI/Screens/AcquireUserScreen.cs` |
 | PlayFab Party as the match transport | `src/NetRumble.Platform.GameCore/Services/GameCorePartyService.cs`, `src/NetRumble.Core/Net/PartyMatchNetwork.cs` |
 | Join-code discovery with PlayFab Lobby | `src/NetRumble.Platform.PlayFab/PlayFabLobbyClient.cs` |
-| A second transport behind the same interface | `src/NetRumble.Platform.Lan/LanPartyService.cs`, `src/NetRumble.Platform.Lan/LanLink.cs` |
 | Multiplayer and communications privilege checks | `src/NetRumble.Platform.GameCore/Services/GameCorePrivilegeService.cs` |
 | Per-player mute, block and avoid enforcement | `src/NetRumble.Platform.GameCore/Services/GameCorePrivacyService.cs` |
 | Text verification before player-authored content is shown | `src/NetRumble.Platform.GameCore/Services/GameCoreModerationService.cs` |
 | Party voice and speech-to-text captions | `src/NetRumble.Platform.GameCore/Services/GameCorePartyService.cs`, `src/NetRumble.Game/UI/Elements/SttOverlay.cs` |
 | One-shot and incremental achievement progress | `src/NetRumble.Platform.GameCore/Services/GameCoreAchievementService.cs`, `src/NetRumble.Game/Profile/AchievementTracker.cs` |
-| Cloud save for settings and achievement stats | `src/NetRumble.Platform.GameCore/Services/GameCoreGameSaveService.cs`, `src/NetRumble.Platform.PlayFab/PlayFabGameSaveService.cs`, `src/NetRumble.Game/Profile/CloudSettingsSync.cs` |
+| Local and cloud save for settings and achievement stats | `src/NetRumble.Platform.GameCore/Services/LocalFileGameSaveService.cs`, `src/NetRumble.Platform.GameCore/Services/GameCoreGameSaveService.cs`, `src/NetRumble.Game/Profile/CloudSettingsSync.cs` |
 | Suspend, resume, constrain and account-change handling | `src/NetRumble.Game/LifecycleCoordinator.cs`, `src/NetRumble.Platform.GameCore/Interop/PlmInterop.cs` |
 | Activity publishing, presence and join-from-guide invites | `src/NetRumble.Platform.GameCore/Services/GameCoreActivityService.cs`, `src/NetRumble.Game/PresencePublisher.cs`, `src/NetRumble.Game/InviteRouter.cs` |
 | Connectivity detection before online play is offered | `src/NetRumble.Platform/Runtime/IPlatformRuntime.cs`, `src/NetRumble.Game/UI/Screens/MainMenuScreen.cs` |
@@ -31,24 +30,40 @@ explain the decisions behind it.
 
 ## Implementation status
 
+The title uses the **simplified user model** on PC and Xbox. All four package
+configurations set `AdvancedUserModel` to `false`; GDK identity acquisition uses only
+`XUserAddOptions.AddDefaultUserSilently`. The system supplies one default user for the
+process lifetime and owns sign-in and user-change relaunches. The title has no account
+picker, in-session account switching, or activity-cache reset on account replacement.
+Profile refresh, reauthentication, privilege changes and sign-out lifecycle notifications
+remain separate from switching accounts and still apply to that one user.
+
+See the [XUserAddAsync simplified-model guidance](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/system/xuser/functions/xuseraddasync).
+For a loose-deployed PC build with no user, the runtime may terminate the process and
+launch the PC bootstrapper for sign-in; the next launch uses the established default user.
+This is system-owned behavior, not a title-driven picker.
+The native-independent `--identity-checks-only` PlatformSpike mode checks the four
+manifests, silent-only user acquisition, absence of the picker API and activity
+account-switch subscription, GDK-only composition and required sign-in.
+
 "Wired" means the code path is complete and compiles. "Proven" means it has been observed
 working. Anything that needs a signed-in account against this sample's own title has not
 been proven by anyone without access to that title and its sandbox.
 
-| Service | Offline provider | GDK provider | Proven |
-|---|---|---|---|
-| `IPlatformRuntime` | Complete | Complete. Lifecycle events bound directly because XBOX GDK.NET wraps none of them. Device kind and a connectivity hint are read from the runtime. | Connectivity hint observed answering. Lifecycle callbacks need XBOX Series X\|S hardware. |
-| `IIdentityService` | Complete | XBOX sign-in complete. Account changes surface through `AccountChanged`, controller associations through `TracksControllerAssociations`, `HasAssociatedController` and `ControllerAssociationChanged`. One native PlayFab login supplies the entity for Party and Lobby. | Xbox sign-in previously proven; the native PlayFab migration needs authenticated console verification. Account-change and association events need XBOX Series X\|S hardware. |
-| `IGameSaveService` | Complete, local | GDK.Net `GameSaveFiles.GetFolderWithUiAsync` and file I/O (`XGameSaveFiles`), independent of PlayFab configuration | Cached-folder file operations and account isolation checked locally. Cross-device roaming remains unverified. |
-| `IPrivilegeService` | Complete | Complete for the two privileges this title gates on, multiplayer and communications | Needs a signed-in account |
-| `IAchievementService` | Complete | Complete | No unlock round trip has been observed |
-| `IActivityService` | Complete | Activation, multiplayer activity and presence are wired and driven from the game | Join and invite flows proven between two XBOX Series X\|S consoles. Presence has not been seen on a real profile. |
-| `IPrivacyService` | Complete | Complete, using per-target permission checks rather than the batch API | Needs a signed-in account |
-| `IModerationService` | Complete | Complete | Needs a signed-in account |
-| `ISocialService` | Complete | Complete. It re-queries rather than tracking a live group, so it raises no change event. | Needs a signed-in account |
-| `IGameInputService` | Unused | A null implementation in every provider. It reports no devices and raises no events. | Not applicable |
-| `IPlatformUiService` | Complete | Complete | Interactive calls unverified end to end |
-| `IPartyService` | Refuses | Party networking, Lobby join-code publishing, messaging and chat are wired | Transport proven over loopback and LAN. No run under real network conditions. |
+| Service | GDK provider | Proven |
+|---|---|---|
+| `IPlatformRuntime` | Complete. Lifecycle events bound directly because XBOX GDK.NET wraps none of them. Device kind and a connectivity hint are read from the runtime. | Connectivity hint observed answering. Lifecycle callbacks need XBOX Series X\|S hardware. |
+| `IIdentityService` | XBOX sign-in complete. Account changes surface through `AccountChanged`, controller associations through `TracksControllerAssociations`, `HasAssociatedController` and `ControllerAssociationChanged`. One native PlayFab login supplies the entity for Party and Lobby. | Xbox sign-in previously proven; the native PlayFab migration needs authenticated console verification. Account-change and association events need XBOX Series X\|S hardware. |
+| `IGameSaveService` | GDK.Net `GameSaveFiles.GetFolderWithUiAsync` and file I/O (`XGameSaveFiles`), independent of PlayFab configuration | Cached-folder file operations and account isolation checked locally. Cross-device roaming remains unverified. |
+| `IPrivilegeService` | Complete for the two privileges this title gates on, multiplayer and communications | Needs a signed-in account |
+| `IAchievementService` | Complete | No unlock round trip has been observed |
+| `IActivityService` | Activation, multiplayer activity and presence are wired and driven from the game | Join and invite flows proven between two XBOX Series X\|S consoles. Presence has not been seen on a real profile. |
+| `IPrivacyService` | Complete, using per-target permission checks rather than the batch API | Needs a signed-in account |
+| `IModerationService` | Complete | Needs a signed-in account |
+| `ISocialService` | Complete. It re-queries rather than tracking a live group, so it raises no change event. | Needs a signed-in account |
+| `IGameInputService` | A null implementation. It reports no devices and raises no events; MonoGame reads input. | Not applicable |
+| `IPlatformUiService` | Complete | Interactive calls unverified end to end |
+| `IPartyService` | Party networking, Lobby join-code publishing, messaging and chat are wired | Join and invite flows proven between two XBOX Series X\|S consoles. |
 
 Run the native-independent save-file checks with
 `dotnet run --project tools\NetRumble.PlatformSpike -- --gamesave-files-checks-only`.
@@ -69,18 +84,13 @@ about an account rather than a reading from a device.
 
 ## Peer trust
 
-Peer identity is authenticated on both transports.
-
-- The GDK provider accepts a "welcome" control packet only from the actual host entity,
-  only while a join is in flight, and only when the claimed peer id is valid. Without those
-  checks any player in the session could take authority over another.
-- The LAN transport carries a per-link session token issued during the connection
-  handshake and required on every link-scoped datagram.
+The GDK provider accepts a "welcome" control packet only from the actual host entity,
+only while a join is in flight, and only when the claimed peer id is valid. Without those
+checks any player in the session could take authority over another.
 
 `HostAsync`, `JoinAsync` and `JoinByConnectionStringAsync` all take an explicit
 `protocolVersion` rather than reading a static, so no layer can disagree about which
 version it is running. An absent version counts as a mismatch and the join is refused
 before a Party endpoint is created.
 
-See [Design notes](design-notes.md#network-trust-boundary) for the full reasoning, and
-[Known gaps](known-gaps.md#networking) for what the LAN transport still does not do.
+See [Design notes](design-notes.md#network-trust-boundary) for the full reasoning.

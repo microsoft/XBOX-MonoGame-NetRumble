@@ -27,8 +27,8 @@ namespace NetRumble.Game.Profile;
 /// <para>
 /// <b>Best-effort throughout.</b> Nothing here surfaces an error: a missed achievement
 /// must never interrupt a match. A report that does not succeed releases its dedupe slot,
-/// so a player who starts offline and signs in later still gets credited for what they
-/// have already done.
+/// so a player whose service connection recovers later still gets credited for what
+/// they have already done.
 /// </para>
 /// </remarks>
 public sealed class AchievementTracker

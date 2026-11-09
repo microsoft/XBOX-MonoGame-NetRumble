@@ -26,7 +26,7 @@ public interface IPlatformRuntime
 
     /// <summary>
     /// True when the native runtime is actually present. False on a dev box without the
-    /// GDK installed, which is a supported configuration — the game runs offline.
+    /// GDK installed; the sign-in screen reports the missing dependency.
     /// </summary>
     bool IsRuntimeAvailable { get; }
 

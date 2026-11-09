@@ -511,9 +511,8 @@ public sealed class MatchDirector : IDisposable
     /// there is nobody left to broadcast the completion it would normally be told about.
     /// </summary>
     /// <remarks>
-    /// A transport that also tears the connection down (the LAN one does) reaches the
-    /// same end through the screen's connection-lost path; one that keeps the network up
-    /// after the host leaves (PlayFab Party does) arrives here and nowhere else.
+    /// PlayFab Party keeps the network up after the host leaves, so this path must
+    /// complete the match without relying on the screen's connection-lost handler.
     /// </remarks>
     private void CheckForAuthorityLeft(int peerId)
     {

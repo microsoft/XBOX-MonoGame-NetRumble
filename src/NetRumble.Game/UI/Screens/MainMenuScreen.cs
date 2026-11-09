@@ -15,8 +15,7 @@ namespace NetRumble.Game.UI.Screens;
 /// <remarks>
 /// <para>
 /// Sign-in itself belongs to <see cref="AcquireUserScreen"/>, which normally runs before
-/// this screen is ever shown; this screen only reflects the identity that leaves behind
-/// and offers a "Sign In" row back to it for a player who chose "Continue Offline".
+/// this screen is ever shown. The game returns to that gate if the account is removed.
 /// </para>
 /// <para>
 /// <b>Divergence from the source's menu shape.</b> The GDScript's Join row opened an
@@ -47,46 +46,14 @@ public sealed class MainMenuScreen : Screen
 
     private readonly MenuList _list = new() { BoxedRows = false, RowSeparation = 0 };
 
-    /// <summary>
-    /// Whether the menu currently carries the "Sign In" row, so it is rebuilt only when
-    /// the identity state actually crosses that boundary rather than on every unrelated
-    /// profile change - a submenu mid-edit rebuilding out from under the player would
-    /// drop unsaved state.
-    /// </summary>
-    private bool _signInRowShown;
-
-    private UiContext? _enteredContext;
-
     /// <summary>The top-level menu never dismisses via Back; it is the root screen.</summary>
     public MainMenuScreen() => AllowBack = false;
 
-    public override void Enter(UiContext context)
-    {
-        _enteredContext = context;
-        context.Profile.IdentityChanged += OnIdentityChanged;
-        BuildMenu(context);
-    }
-
-    public override void Exit()
-    {
-        if (_enteredContext is { } context)
-        {
-            context.Profile.IdentityChanged -= OnIdentityChanged;
-        }
-
-        base.Exit();
-    }
+    public override void Enter(UiContext context) => BuildMenu(context);
 
     public override void OnRevealed()
     {
         base.OnRevealed();
-
-        // Reached when the acquire-user screen (or any other pushed screen) is popped;
-        // the identity may well have just changed, and nothing else refreshes it.
-        if (_enteredContext is { } context)
-        {
-            RefreshSignInRow(context);
-        }
 
         if (_list.Focused is null)
         {
@@ -125,22 +92,12 @@ public sealed class MainMenuScreen : Screen
     }
 
     /// <summary>
-    /// Rebuilds the rows from the current identity, adding or dropping the "Sign In"
-    /// row, matching <c>_build_menu</c> in the source.
+    /// Builds the signed-in player's menu.
     /// </summary>
     private void BuildMenu(UiContext context)
     {
-        _signInRowShown = !context.Profile.IsSignedIn;
         _list.Clear();
         _list.Bounds = MenuRect;
-
-        // Sign-in normally completes on the acquire-user screen before this menu is
-        // ever shown, so this row only appears when the player chose to continue
-        // offline there.
-        if (_signInRowShown)
-        {
-            _list.AddButton("Sign In", () => context.Screens.Push(new AcquireUserScreen()));
-        }
 
         _list.AddButton("Host Match", () => OnHostSelected(context));
         _list.AddButton("Join Match", () => OnJoinSelected(context));
@@ -159,16 +116,6 @@ public sealed class MainMenuScreen : Screen
 
         _list.FocusFirst();
     }
-
-    private void RefreshSignInRow(UiContext context)
-    {
-        if (_signInRowShown == context.Profile.IsSignedIn)
-        {
-            BuildMenu(context);
-        }
-    }
-
-    private void OnIdentityChanged() => RefreshSignInRow(_enteredContext!);
 
     /// <summary>
     /// Hosting takes a round trip through the platform's networking layer, and an
@@ -233,11 +180,6 @@ public sealed class MainMenuScreen : Screen
             return runtime.OfflineReason;
         }
 
-        // XR-045: EnsureAsync (rather than CheckAsync) drives the platform's own
-        // resolve-with-UI flow on a denial - a subscription upsell, for instance - so a
-        // fixable denial gets the system's fix-it surface instead of just this title's
-        // message. A denial the UI cannot resolve (parental restriction, suspension)
-        // still falls straight through unchanged.
         var verdict = await context.Platform.Privileges.EnsureAsync(GamePrivilege.Multiplayer);
         return verdict.Allowed ? null : verdict.Message;
     }
