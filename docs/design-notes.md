@@ -96,6 +96,10 @@ through `PumpDispatcher`, but shutdown drains the underlying workers without awa
 pump-dependent public completions. The title's reconciliation callback starts on the
 pump so it captures the game-thread synchronization context. The bounded exit flush
 keeps pumping runtime completions rather than waiting on a queue that has stopped.
+First-run local settings are seeded without a cloud push, so the initial pull cannot
+be preceded by a write of defaults. Connectivity recovery queues behind an active
+reconciliation attempt and rechecks the online state, write barrier and resume
+generation before retrying.
 Shutdown waits for folder acquisition and file operations before releasing the runtime.
 See the [XGameSaveFiles overview](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/game-save/xgamesavefiles)
 and [API migration mapping](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/game-save/game-saves-walkthroughs-and-samples#interop-between-xgamesave-and-xgamesavefiles).

@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Reflection;
+using NetRumble.Game;
 using NetRumble.Game.Profile;
 using NetRumble.Platform;
 using NetRumble.Platform.Offline;
@@ -14,6 +16,17 @@ var root = Path.Combine(Path.GetTempPath(), $"netrumble-reconciliation-{Guid.New
 try
 {
     var saves = new TestSaves();
+    var firstRunRoot = Path.Combine(root, "first-run");
+    var firstRunProfile = new PlayerProfile(root: firstRunRoot);
+    var firstRunSettings = new CloudSettingsSync(saves, firstRunProfile);
+    firstRunProfile.AttachCloudSave(firstRunSettings);
+    saves.Cloud[CloudSettingsSync.SaveKey] = """{"masterVolume":0.8}"""u8.ToArray();
+    firstRunProfile.Rehome("second-device-player");
+    Check("first-run rehome creates a local settings file", Directory.GetFiles(firstRunRoot, "*.cfg").Length == 1);
+    Check("first-run defaults never push before the initial cloud pull", saves.CloudWrites == 0);
+    Check("the first cloud pull preserves the other device's settings",
+        (await firstRunSettings.PullAsync()).Succeeded && firstRunProfile.MasterVolume == 0.8f);
+
     var profile = new PlayerProfile("test-player", root) { MasterVolume = 0.2f };
     var settings = new CloudSettingsSync(saves, profile);
     profile.AttachCloudSave(settings);
@@ -82,6 +95,42 @@ try
         Check("a delayed local write cannot push a pre-reconciliation cloud snapshot",
             cloud.RootElement.GetProperty("kills").GetInt32() == 100);
     }
+
+    Task RetryAfter(Task active, Func<bool> shouldRetry, Func<Task> retry)
+        => (Task)typeof(LifecycleCoordinator).GetMethod("RetryReconciliationAfterAsync",
+            BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [active, shouldRetry, retry])!;
+    var active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var retries = 0;
+    var needsReconciliation = true;
+    Task Retry()
+    {
+        retries++;
+        needsReconciliation = false;
+        return Task.CompletedTask;
+    }
+    var queued = RetryAfter(active.Task, () => needsReconciliation, Retry);
+    var duplicate = RetryAfter(queued, () => needsReconciliation, Retry);
+    Check("connectivity recovery waits behind active reconciliation", retries == 0 && !queued.IsCompleted);
+    active.SetResult();
+    await duplicate;
+    Check("connectivity recovery is retained and deduplicated after the active attempt", retries == 1);
+
+    active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var online = true;
+    queued = RetryAfter(active.Task, () => online, Retry);
+    online = false;
+    active.SetResult();
+    await queued;
+    Check("queued retries recheck connectivity before starting", retries == 1);
+
+    active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    var generation = 1;
+    var capturedGeneration = generation;
+    queued = RetryAfter(active.Task, () => generation == capturedGeneration, Retry);
+    generation++;
+    active.SetResult();
+    await queued;
+    Check("a newer resume supersedes retries queued for the previous session", retries == 1);
 }
 finally
 {

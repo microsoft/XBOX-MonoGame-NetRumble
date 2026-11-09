@@ -39,6 +39,7 @@ public sealed class LifecycleCoordinator
     private bool _controllerMissing;
     private bool _matchDroppedBySuspend;
     private Task _saveReconciliation = Task.CompletedTask;
+    private long _saveReconciliationGeneration;
 
     /// <summary>
     /// Whether a live session existed as of the last frame (XR-001).
@@ -85,15 +86,30 @@ public sealed class LifecycleCoordinator
     {
         if (online)
         {
-            if (_context.Platform.GameSaves is ICloudSaveSynchronization { RequiresReconciliation: true }
-                && _saveReconciliation.IsCompleted)
+            if (_context.Platform.GameSaves is ICloudSaveSynchronization { RequiresReconciliation: true })
             {
-                _saveReconciliation = ReconcileSavesAsync();
+                var generation = _saveReconciliationGeneration;
+                _saveReconciliation = RetryReconciliationAfterAsync(
+                    _saveReconciliation,
+                    () => generation == _saveReconciliationGeneration
+                        && _context.Platform.Runtime.IsOnline
+                        && _context.Platform.GameSaves is ICloudSaveSynchronization { RequiresReconciliation: true },
+                    ReconcileSavesAsync);
             }
             else
             {
                 _context.Achievements.RetryPending();
             }
+        }
+    }
+
+    private static async Task RetryReconciliationAfterAsync(
+        Task active, Func<bool> shouldRetry, Func<Task> retry)
+    {
+        await active;
+        if (shouldRetry())
+        {
+            await retry();
         }
     }
 
@@ -297,6 +313,7 @@ public sealed class LifecycleCoordinator
         _context.Audio.PlayMusic();
 
         // Reconcile downloaded saves before cloud writes or achievement retries resume.
+        _saveReconciliationGeneration++;
         _saveReconciliation = ReconcileSavesAsync();
 
         // XR-048: everything the title knows about the account was answered before the
