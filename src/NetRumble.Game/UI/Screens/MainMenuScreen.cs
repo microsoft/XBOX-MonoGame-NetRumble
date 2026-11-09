@@ -180,11 +180,6 @@ public sealed class MainMenuScreen : Screen
             return runtime.OfflineReason;
         }
 
-        // XR-045: EnsureAsync (rather than CheckAsync) drives the platform's own
-        // resolve-with-UI flow on a denial - a subscription upsell, for instance - so a
-        // fixable denial gets the system's fix-it surface instead of just this title's
-        // message. A denial the UI cannot resolve (parental restriction, suspension)
-        // still falls straight through unchanged.
         var verdict = await context.Platform.Privileges.EnsureAsync(GamePrivilege.Multiplayer);
         return verdict.Allowed ? null : verdict.Message;
     }
