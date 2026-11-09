@@ -12,6 +12,10 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        if (args.Contains("--identity-checks-only", StringComparer.OrdinalIgnoreCase))
+        {
+            return await IdentityChecks.Run().ConfigureAwait(false);
+        }
         if (args.Contains("--gamesave-files-checks-only", StringComparer.OrdinalIgnoreCase))
         {
             return await GameSaveFilesChecks.Run().ConfigureAwait(false);
@@ -68,7 +72,10 @@ internal static class Program
             return 1;
         }
         FontCoverageChecks.Run();
-        await IdentityChecks.Run().ConfigureAwait(false);
+        if (await IdentityChecks.Run().ConfigureAwait(false) != 0)
+        {
+            return 1;
+        }
         MatchEndChecks.Run();
 
         Console.WriteLine();
