@@ -307,7 +307,4 @@ internal sealed class OfflinePlatformUiService : IPlatformUiService
     public Task<PlatformResult<string>> ShowTextEntryAsync(TextEntryRequest request, CancellationToken cancellationToken = default)
         => Task.FromResult(PlatformResult<string>.Unavailable(
             "No platform keyboard in this build; the game draws its own."));
-
-    public Task<PlatformResult> ShowAccountPickerAsync(CancellationToken cancellationToken = default)
-        => Task.FromResult(PlatformResult.Unavailable());
 }

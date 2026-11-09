@@ -31,6 +31,22 @@ explain the decisions behind it.
 
 ## Implementation status
 
+The title uses the **simplified user model** on PC and Xbox. All four package
+configurations set `AdvancedUserModel` to `false`; GDK identity acquisition uses only
+`XUserAddOptions.AddDefaultUserSilently`. The system supplies one default user for the
+process lifetime and owns sign-in and user-change relaunches. The title has no account
+picker, in-session account switching, or activity-cache reset on account replacement.
+Profile refresh, reauthentication, privilege changes and sign-out lifecycle notifications
+remain separate from switching accounts and still apply to that one user.
+
+See the [XUserAddAsync simplified-model guidance](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/system/xuser/functions/xuseraddasync).
+For a loose-deployed PC build with no user, the runtime may terminate the process and
+launch the PC bootstrapper for sign-in; the next launch uses the established default user.
+This is system-owned behavior, not a title-driven picker.
+The native-independent `--identity-checks-only` PlatformSpike mode checks the four
+manifests, silent-only user acquisition, absence of the picker API and activity
+account-switch subscription, and developer identity forwarding.
+
 "Wired" means the code path is complete and compiles. "Proven" means it has been observed
 working. Anything that needs a signed-in account against this sample's own title has not
 been proven by anyone without access to that title and its sandbox.

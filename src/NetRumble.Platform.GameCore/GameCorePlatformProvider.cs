@@ -55,7 +55,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         Social = new GameCoreSocialService(_runtime, identity, _xbl);
         Moderation = new GameCoreModerationService(_runtime, identity, _xbl);
         Privacy = new GameCorePrivacyService(_runtime, identity, _xbl);
-        PlatformUi = new GameCorePlatformUiService(_runtime, identity);
+        PlatformUi = new GameCorePlatformUiService(_runtime);
 
         Party = new GameCorePartyService(
             _runtime, identity, _online, _online.Configuration, (GameCoreModerationService)Moderation);

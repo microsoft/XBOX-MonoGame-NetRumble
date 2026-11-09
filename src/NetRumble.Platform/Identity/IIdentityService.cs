@@ -196,8 +196,8 @@ public enum PlatformAccountChange
 public readonly record struct SignInOptions
 {
     /// <summary>
-    /// Allow the platform account picker to be shown when a silent sign-in fails.
-    /// False performs a silent-only attempt.
+    /// Allow sign-in UI when supported by the provider. The GDK provider always
+    /// acquires the default user silently under the simplified user model.
     /// </summary>
     public bool AllowUserInterface { get; init; }
 
