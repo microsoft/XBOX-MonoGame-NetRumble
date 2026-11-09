@@ -48,12 +48,6 @@ suspension and resume invalidate the cached directory. The next file operation
 reacquires it before accessing files. Public cloud-operation completions are delivered
 through the runtime pump.
 
-The GDK provider always uses XGameSaveFiles; its save backend does not depend on
-PlayFab configuration. The separate PlayFab developer decorator uses PlayFab user
-data because it has no Xbox user handle for connected storage. Both providers require
-the native Gaming Runtime; PlayFab services also require the native PlayFab libraries.
-Only undecorated offline/LAN runs are GDK-free.
-
 Neither tier has been round-tripped between two devices. See
 [Known gaps](known-gaps.md#never-observed-end-to-end).
 
