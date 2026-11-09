@@ -113,6 +113,7 @@ public enum PlatformStatus
     /// <summary>The call needs a signed-in user and there isn't one.</summary>
     NotSignedIn,
 
+    /// <summary>The match is full, closed to new players, or no longer exists.</summary>
     SessionNotJoinable,
 
     /// <summary>The account lacks the required privilege (XR-045).</summary>

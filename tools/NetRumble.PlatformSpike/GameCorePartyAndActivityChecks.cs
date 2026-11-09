@@ -287,10 +287,8 @@ internal static class GameCorePartyAndActivityChecks
     /// stub.
     /// </summary>
     /// <remarks>
-    /// The expected failure differs per backend, and that difference is the point:
-    /// connected storage has no user handle and no Gaming Runtime here, so it is
-    /// unavailable, whereas the PlayFab tier gets as far as looking for credentials it
-    /// does not have. See <c>NetRumbleCloudSave</c> in <c>Directory.Build.props</c>.
+    /// Connected storage has no user handle and no initialized Gaming Runtime here,
+    /// so it is unavailable even with a configured PlayFab title.
     /// </remarks>
     private static async Task OnlineServiceDegradePaths()
     {
@@ -301,13 +299,9 @@ internal static class GameCorePartyAndActivityChecks
             .SaveCloudAsync("settings", "blob"u8.ToArray())
             .ConfigureAwait(false);
 
-#if NETRUMBLE_PLAYFAB_GAMESAVE
-        Check("GameCore cloud save uses the PlayFab session", save.Status == PlatformStatus.NotSignedIn);
-#else
         Check(
             "GameCore cloud save is unavailable without connected storage",
             save.Status == PlatformStatus.Unavailable);
-#endif
     }
 
     private static bool Check(string label, bool condition)

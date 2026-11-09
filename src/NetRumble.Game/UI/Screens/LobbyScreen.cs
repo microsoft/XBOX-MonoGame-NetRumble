@@ -491,6 +491,13 @@ public sealed class LobbyScreen : Screen
     /// </summary>
     private bool HandleZoneAction(UiContext context, MenuAction action)
     {
+        if ((_focusZone is FocusZone.ShipTabs or FocusZone.ColorTabs)
+            && (action is MenuAction.Up or MenuAction.Down or MenuAction.Left or MenuAction.Right or MenuAction.Accept)
+            && !context.Input.IsGamePadHeld(action))
+        {
+            return true;
+        }
+
         switch (_focusZone)
         {
             case FocusZone.ShipTabs:
@@ -1637,9 +1644,11 @@ public sealed class LobbyScreen : Screen
 
         if (local is null)
         {
+            CrashLog.Mark($"lobby: ready ignored; local peer {_network.LocalPeerId} is absent from the roster");
             return;
         }
 
+        CrashLog.Mark($"lobby: ready peer={local.PeerId}, host={_network.IsHost}, value={!local.IsReady}");
         SetLocalReady(context, !local.IsReady);
         TryAutoStart(context);
     }

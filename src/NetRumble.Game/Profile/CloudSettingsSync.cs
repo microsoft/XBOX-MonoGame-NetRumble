@@ -5,8 +5,7 @@ namespace NetRumble.Game.Profile;
 
 /// <summary>
 /// Syncs <see cref="PlayerProfile"/>'s settings to the cloud tier of
-/// <see cref="IGameSaveService"/>, which on this port is PlayFab user
-/// data.
+/// <see cref="IGameSaveService"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -50,30 +49,36 @@ public sealed class CloudSettingsSync
 
     /// <summary>
     /// Pulls the cloud record over the local one and writes the result back to disk.
-    /// Returns true only when a record actually existed and applied.
+    /// Returns a successful true only when a record actually existed and applied.
     /// </summary>
     /// <remarks>
     /// Cloud wins on sign-in. The alternative - merging, or preferring the newer of the
     /// two - needs a timestamp this payload does not carry and a conflict UI the source
     /// never had; taking the cloud copy is what makes signing in on a second console
     /// bring your settings with you, which is the only reason this tier exists.
-    /// An absent record, an offline provider and a malformed blob are all "nothing to
-    /// apply", not failures: the local settings simply stand.
+    /// An absent record is a successful false. Failed reads and malformed records are
+    /// explicit failures rather than an absent settings record.
     /// </remarks>
-    public async Task<bool> PullAsync(CancellationToken cancellationToken = default)
+    public async Task<PlatformResult<bool>> PullAsync(CancellationToken cancellationToken = default)
     {
         var result = await _saves.LoadCloudAsync(SaveKey, cancellationToken);
-
-        if (result.Failed || result.Value is not { Length: > 0 } bytes)
+        cancellationToken.ThrowIfCancellationRequested();
+        if (result.Failed)
         {
-            return false;
+            return PlatformResult<bool>.Fail(result.Status,
+                result.Message ?? "Could not read your saved settings.", result.Result.Diagnostics);
+        }
+        if (result.Value is not { Length: > 0 } bytes)
+        {
+            return PlatformResult<bool>.Ok(false);
         }
 
         var values = TryParse(bytes);
 
         if (values is null)
         {
-            return false;
+            return PlatformResult<bool>.Fail(PlatformStatus.Failed,
+                "Could not read your saved settings.", "The cloud settings record is malformed.");
         }
 
         // Applying writes the local file too, so the two tiers agree straight away
@@ -91,7 +96,7 @@ public sealed class CloudSettingsSync
             _profile.SuppressCloudPush = false;
         }
 
-        return true;
+        return PlatformResult<bool>.Ok(true);
     }
 
     /// <summary>
