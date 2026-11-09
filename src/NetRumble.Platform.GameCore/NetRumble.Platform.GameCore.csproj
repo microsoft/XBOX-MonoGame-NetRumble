@@ -100,4 +100,31 @@
     </ItemGroup>
   </Target>
 
+  <Target Name="IncludeNativePlayFab" BeforeTargets="AssignTargetPaths">
+    <ItemGroup>
+      <PlayFabNativeLibrary Include="Party.dll;PlayFabCore.dll;PlayFabServices.dll;PlayFabMultiplayer.dll;libHttpClient.dll;XCurl.dll" />
+      <PlayFabNativePath Include="@(PlayFabNativeLibrary->'$(GameDKCoreLatest)windows\bin\x64\%(Identity)')" />
+      <Content Include="@(PlayFabNativePath)" Condition="Exists('%(PlayFabNativePath.Identity)')">
+        <Link>%(Filename)%(Extension)</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </Content>
+      <Content Include="$(MSBuildThisFileDirectory)..\..\third_party\party\Party.dll"
+               Condition="!Exists('$(GameDKCoreLatest)windows\bin\x64\Party.dll')">
+        <Link>Party.dll</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+      <Content Include="$(MSBuildThisFileDirectory)..\..\third_party\party\PlayFabCore.dll"
+               Condition="!Exists('$(GameDKCoreLatest)windows\bin\x64\PlayFabCore.dll')">
+        <Link>PlayFabCore.dll</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+      <Content Include="$(MSBuildThisFileDirectory)..\..\third_party\party\libHttpClient.dll"
+               Condition="!Exists('$(GameDKCoreLatest)windows\bin\x64\libHttpClient.dll')">
+        <Link>libHttpClient.dll</Link>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+  </Target>
+
 </Project>

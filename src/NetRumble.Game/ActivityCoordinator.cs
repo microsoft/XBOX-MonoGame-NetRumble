@@ -29,7 +29,7 @@ namespace NetRumble.Game;
 /// </para>
 /// <para>
 /// <b>Retry is bounded and does not outlive its intent.</b> A failed apply is retried with
-/// the same escalating backoff <c>PlayFabRestClient</c> uses, but the retry loop re-reads
+/// escalating backoff, but the retry loop re-reads
 /// the desired state each time: a delete that arrives while a set is being retried simply
 /// ends the retry, because the thing it was retrying is no longer what the title wants.
 /// </para>
@@ -48,7 +48,7 @@ namespace NetRumble.Game;
 public sealed class ActivityCoordinator
 {
     /// <summary>
-    /// Backoff between retries, in seconds. Matches the REST client's shape - quick
+    /// Backoff between retries, in seconds. A quick
     /// first retry, then back off - and stops rather than retrying forever, because an
     /// activity that cannot be published after this long is a condition the player
     /// should be told about instead of one the title keeps quietly re-attempting.

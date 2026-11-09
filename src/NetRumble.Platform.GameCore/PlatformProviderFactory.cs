@@ -62,7 +62,11 @@ public static class PlatformProviderFactory
         // second login for the same player.
         return provider is GameCorePlatformProvider || playFab is null || playFab.IsPlaceholder
             ? provider
-            : new PlayFabPlatformProvider(provider, playFab);
+            : new PlayFabPlatformProvider(provider, playFab,
+                () => GameRuntimeHost.EnsureInitialized() && GameRuntimeHost.Current is { } runtime
+                    ? runtime
+                    : throw new PlatformNotSupportedException(GameRuntimeProbe.UnavailableReason),
+                _ => GameRuntimeHost.Shutdown());
     }
 
     private static IPlatformProvider CreateCore(

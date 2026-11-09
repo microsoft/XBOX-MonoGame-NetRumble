@@ -29,9 +29,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     private readonly GameCoreXblContext _xbl;
     private readonly GameCoreOnlineSession _online;
     private readonly OfflinePlatformProvider _fallback;
-#if !NETRUMBLE_PLAYFAB_GAMESAVE
     private readonly GameCoreGameSaveService _saves;
-#endif
 
     public GameCorePlatformProvider(string? saveRoot = null, PlayFabConfiguration? playFab = null)
     {
@@ -39,27 +37,18 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         _fallback = new OfflinePlatformProvider(saveRoot);
         _online = new GameCoreOnlineSession(
             _runtime,
-            playFab ?? new PlayFabConfiguration { TitleId = PlayFabConfiguration.PlaceholderTitleId },
-            saveRoot);
+            playFab ?? new PlayFabConfiguration { TitleId = PlayFabConfiguration.PlaceholderTitleId });
 
         Identity = new GameCoreIdentityService(_runtime, _online);
         var identity = (GameCoreIdentityService)Identity;
 
         _xbl = new GameCoreXblContext(_runtime, identity);
 
-#if !NETRUMBLE_PLAYFAB_GAMESAVE
-        // The cloud tier is the GDK's connected storage (M10). The local tier moves with
-        // it onto the Xbox account, because a save service that no longer talks to
-        // PlayFab must not still need a PlayFab login to decide which folder a file
-        // belongs in; the PlayFab entity id is passed as the legacy key so a player
-        // upgrading from a PlayFab-backed build still reads their existing files.
         _saves = new GameCoreGameSaveService(
             _runtime,
             identity,
             saveRoot,
-            () => identity.CurrentUser?.LocalId,
-            () => _online.EntityId is { Length: > 0 } entityId ? entityId : null);
-#endif
+            () => identity.CurrentUser?.LocalId);
 
         Privileges = new GameCorePrivilegeService(_runtime, identity);
         Achievements = new GameCoreAchievementService(_runtime, identity, _xbl);
@@ -79,6 +68,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         // the same thread every other provider event does.
         _runtime.Activity = activity;
         _runtime.Party = (GameCorePartyService)Party;
+        _runtime.Online = _online;
     }
 
     public string Name => "Microsoft GDK (GDK.Net)";
@@ -123,19 +113,10 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
                     | PlatformCapabilities.VoiceChat;
             }
 
-#if NETRUMBLE_PLAYFAB_GAMESAVE
-            // The PlayFab user-data tier is the whole of cloud save in this build, so a
-            // placeholder title id means there is no cloud save to advertise.
-            if (!_online.Configuration.IsPlaceholder)
-            {
-                capabilities |= PlatformCapabilities.CloudSave;
-            }
-#else
             // Connected storage is a Gaming Runtime service and knows nothing about
             // PlayFab, so gating it on a PlayFab title id would hide roaming saves on
             // exactly the console builds that are required to have them.
             capabilities |= PlatformCapabilities.CloudSave;
-#endif
 
             return capabilities;
         }
@@ -158,32 +139,16 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     public IPlatformUiService PlatformUi { get; }
 
     // --- Mixed-provider services -------------------------------------------
-    // Party, Activity and GameSaves are all backed by the same
-    // GameCoreOnlineSession, so the Xbox user produces exactly one PlayFab identity.
+    // Party uses GameCoreOnlineSession; XGameSaveFiles uses the Xbox user directly.
     // GameInput is deliberately never GDK-backed - see its own remarks below.
 
     public IPartyService Party { get; }
     public IActivityService Activity { get; }
 
     /// <summary>
-    /// Local save plus a roaming cloud tier.
+    /// Local saves plus XGameSaveFiles connected storage through GDK.Net.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Which cloud tier is a build-time choice, because the two do not coexist usefully:
-    /// they would roam the same keys to two different places and disagree. Connected
-    /// storage (<see cref="GameCoreGameSaveService"/>) is the default and the one XBOX
-    /// certification is written against; defining <c>NETRUMBLE_PLAYFAB_GAMESAVE</c> -
-    /// through <c>/p:NetRumbleCloudSave=PlayFab</c> - selects the PlayFab user-data tier
-    /// instead, which is what the desktop <c>PlayFabPlatformProvider</c> uses
-    /// unconditionally because it has no GDK user handle to give connected storage.
-    /// </para>
-    /// </remarks>
-#if NETRUMBLE_PLAYFAB_GAMESAVE
-    public IGameSaveService GameSaves => _online.GameSaves;
-#else
     public IGameSaveService GameSaves => _saves;
-#endif
 
     /// <summary>
     /// Delegated on purpose, not left unimplemented. <c>docs/platform-abstraction.md</c>
@@ -210,7 +175,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     /// Gaming Runtime is still initialized, and only then shut the runtime down.
     /// </para>
     /// <para>
-    /// <b>One budget across the whole teardown, not one per stage.</b> Both drains used to
+    /// <b>One budget across the pump-driven stages, not one per stage.</b> Both drains used to
     /// arm their own five seconds, so an exit that had to wait for both waited ten, on top
     /// of the cloud-save flush the game runs before calling this - thirteen seconds with
     /// the audio already stopped and the window still up. The reasoning that justified it
@@ -220,6 +185,11 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     /// changes - both stages are still waited on, and one that never lands still gives
     /// way rather than turning an exit into a hang.
     /// </para>
+    /// <para>
+    /// PlayFab sign-ins and borrowed entity handles do not need dispatcher pumping.
+    /// Their shutdown is awaited without the pump budget so the Gaming Runtime cannot
+    /// be released while those native calls are still using it.
+    /// </para>
     /// </remarks>
     public async ValueTask DisposeAsync()
     {
@@ -228,12 +198,8 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         _runtime.PumpUntil(Party.LeaveAsync(), RemainingUntil(deadline));
         await Identity.SignOutAsync().ConfigureAwait(false);
         _runtime.PumpUntil(_xbl.ShutdownAsync(), RemainingUntil(deadline));
-#if !NETRUMBLE_PLAYFAB_GAMESAVE
-        // Before the runtime goes down: the provider holds a native handle bound to a
-        // user that sign-out has already released.
-        _saves.Dispose();
-#endif
-        _online.Dispose();
+        await _saves.ShutdownAsync().ConfigureAwait(false);
+        await _online.ShutdownAsync().ConfigureAwait(false);
         await _runtime.ShutdownAsync().ConfigureAwait(false);
         await _fallback.DisposeAsync().ConfigureAwait(false);
     }

@@ -4,44 +4,33 @@ namespace NetRumble.Platform.PlayFab;
 /// Decorates another provider, adding a PlayFab identity and cloud save.
 /// </summary>
 /// <remarks>
-/// <para>
-/// A decorator, for the same reason <c>LanPlatformProvider</c> is one: PlayFab changes
-/// three services and nothing else, so re-implementing the other nine would produce a
-/// copy of <c>OfflinePlatformProvider</c> that drifts from it.
-/// </para>
-/// <para>
-/// <b>What this composes with matters.</b> Over the offline provider and a
-/// <c>--pf-user</c> custom id, this is a complete, working online identity on any dev
-/// box: a real entity id, real cloud save, real lobbies, with no GDK,
-/// no console and no Xbox account - only a title id. That is the configuration this was
-/// built to make possible, because it is the only one that can actually be run and
-/// checked here.
-/// </para>
-/// <para>
-/// The GDK provider is intentionally not wrapped by this decorator. It owns a
-/// <c>GameCoreOnlineSession</c> directly, because its Xbox user can now obtain the XSTS
-/// token for <c>/Client/LoginWithXbox</c> and that same login has to feed Party, Lobby
-/// and cloud save. Wrapping it here would put a second
-/// <see cref="PlayFabIdentityService"/> on top and risk two PlayFab identities for one
-/// player. See <c>docs/design-notes.md</c>.
-/// </para>
+/// Requires the native Gaming Runtime and PlayFab libraries, including for developer
+/// custom-ID sign-in. GameCore owns its Xbox-backed session directly and is not decorated.
 /// </remarks>
 public sealed class PlayFabPlatformProvider : IPlatformProvider
 {
     private readonly IPlatformProvider _inner;
     private readonly PlayFabOnlineServices _services;
     private readonly PlayFabIdentityService _identity;
+    private readonly PlayFabDeveloperRuntime _runtime;
 
     public PlayFabPlatformProvider(
         IPlatformProvider inner,
-        PlayFabConfiguration configuration,
-        HttpMessageHandler? handler = null)
+        PlayFabConfiguration configuration)
+        : this(inner, configuration, GDK.Net.GameRuntime.Initialize, runtime => runtime.Dispose())
+    {
+    }
+
+    internal PlayFabPlatformProvider(
+        IPlatformProvider inner, PlayFabConfiguration configuration,
+        Func<GDK.Net.GameRuntime> startRuntime, Action<GDK.Net.GameRuntime> stopRuntime)
     {
         ArgumentNullException.ThrowIfNull(inner);
 
         _inner = inner;
-        _services = new PlayFabOnlineServices(configuration, handler);
+        _services = new PlayFabOnlineServices(configuration);
         _identity = new PlayFabIdentityService(inner.Identity, _services);
+        _runtime = new PlayFabDeveloperRuntime(inner.Runtime, _services, startRuntime, stopRuntime);
     }
 
     public string Name => $"{_inner.Name}+PlayFab";
@@ -57,7 +46,7 @@ public sealed class PlayFabPlatformProvider : IPlatformProvider
     /// whose only possible outcome is an error dialog.
     /// </remarks>
     public PlatformCapabilities Capabilities
-        => _services.Configuration.IsPlaceholder
+        => _services.Configuration.IsPlaceholder || !_runtime.IsInitialized
             ? _inner.Capabilities
             : _inner.Capabilities | PlatformCapabilities.CloudSave;
 
@@ -68,7 +57,7 @@ public sealed class PlayFabPlatformProvider : IPlatformProvider
 
     public IGameSaveService GameSaves => _services.GameSaves;
 
-    public IPlatformRuntime Runtime => _inner.Runtime;
+    public IPlatformRuntime Runtime => _runtime;
 
     public IPartyService Party => _inner.Party;
 
@@ -90,7 +79,7 @@ public sealed class PlayFabPlatformProvider : IPlatformProvider
 
     public async ValueTask DisposeAsync()
     {
-        _services.Dispose();
+        await _runtime.ShutdownAsync().ConfigureAwait(false);
         await _inner.DisposeAsync().ConfigureAwait(false);
     }
 }
@@ -128,7 +117,11 @@ internal sealed class PlayFabIdentityService : IIdentityService
 
         // Forward, but re-decorate: a user change raised by the inner provider must not
         // reach game code still carrying an entity id from the previous player.
-        _inner.UserChanged += user => UserChanged?.Invoke(Decorate(user));
+        _inner.UserChanged += user =>
+        {
+            _services.SignOut();
+            UserChanged?.Invoke(user);
+        };
     }
 
     public PlatformUser? CurrentUser => Decorate(_inner.CurrentUser);
@@ -193,6 +186,7 @@ internal sealed class PlayFabIdentityService : IIdentityService
         SignInOptions options,
         CancellationToken cancellationToken)
     {
+        _services.SignOut();
         var inner = await _inner.SignInAsync(options, cancellationToken).ConfigureAwait(false);
 
         if (inner.Failed)

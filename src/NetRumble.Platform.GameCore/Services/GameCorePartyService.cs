@@ -1,6 +1,5 @@
 using NetRumble.Platform.Networking;
 using System.Buffers.Binary;
-using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using GDK.Net;
@@ -81,10 +80,8 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
     /// from in the first place.
     /// </summary>
     private readonly GameCoreModerationService? _moderation;
-    private Dictionary<PartyOperationId, PendingOperation> _pendingOperations = [];
-    private List<PendingRegions> _pendingRegions = [];
-    private readonly ConcurrentQueue<Action> _resetCancellations = new();
-    private readonly object _waitGate = new();
+    private readonly Dictionary<PartyOperationId, PendingOperation> _pendingOperations = [];
+    private readonly List<PendingRegions> _pendingRegions = [];
     private readonly Dictionary<ushort, int> _endpointToPeer = [];
     private readonly Dictionary<int, PartyEndpoint> _peerToEndpoint = [];
     private readonly Dictionary<string, int> _entityToPeer = new(StringComparer.Ordinal);
@@ -160,6 +157,10 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         _online = online;
         _configuration = configuration;
         _moderation = moderation;
+        if (_online is not null)
+        {
+            _online.Lobbies.ConnectionLost += OnLobbyConnectionLost;
+        }
     }
 
     public bool HasNetwork { get; private set; }
@@ -533,6 +534,9 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 await TryAwait(_party.DestroyLocalUser(_partyUser), teardownBudget.Token).ConfigureAwait(false);
             }
         }
+        catch (OperationCanceledException) when (teardownBudget.IsCancellationRequested)
+        {
+        }
         catch (Exception ex) when (IsPlatformException(ex))
         {
             CrashLog.MarkOnce("party-leave", $"party: leave teardown failed: {ex.Message}");
@@ -546,20 +550,22 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
             if (_online is not null && _lobbyId.Length > 0)
             {
-                // #25: a host that merely leaves its own lobby leaves the row behind,
-                // still carrying the join code in its indexed search data and still
-                // answering FindLobbies - so a third client resolves the code, joins
-                // the lobby and then blocks forever on a Party handshake with a host
-                // that is gone. The lobby has no owner migration (see
-                // PlayFabLobbyClient.CreateLobbyWithJoinCodeAsync), so when the owner
-                // goes the lobby has nothing left to be: delete it outright.
+                // Close discovery and joins before the non-migrating owner leaves.
                 if (wasHost)
                 {
-                    await _online.Lobbies.DeleteLobbyAsync(_lobbyId).ConfigureAwait(false);
+                    var removed = await _online.Lobbies.CloseAndLeaveLobbyAsync(_lobbyId).ConfigureAwait(false);
+                    if (removed.Failed)
+                    {
+                        CrashLog.Mark($"party: lobby close failed: {removed}");
+                    }
                 }
                 else
                 {
-                    await _online.Lobbies.LeaveLobbyAsync(_lobbyId).ConfigureAwait(false);
+                    var left = await _online.Lobbies.LeaveLobbyAsync(_lobbyId).ConfigureAwait(false);
+                    if (left.Failed)
+                    {
+                        CrashLog.Mark($"party: lobby leave failed: {left}");
+                    }
                 }
             }
 
@@ -758,6 +764,10 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
 
         _disposed = true;
+        if (_online is not null)
+        {
+            _online.Lobbies.ConnectionLost -= OnLobbyConnectionLost;
+        }
         DisposeParty();
         ResetSessionState();
     }
@@ -794,10 +804,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 return connected;
             }
 
-            lock (_waitGate)
-            {
-                _peerAssignment = new TaskCompletionSource<int>();
-            }
+            _peerAssignment = new TaskCompletionSource<int>();
             SendControlHello();
             var assigned = await AwaitPeerAssignmentAsync(cancellationToken).ConfigureAwait(false);
             if (assigned <= IPartyService.HostPeerId)
@@ -907,7 +914,16 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         _party = PartyManager.Initialize(_configuration!.TitleId);
     }
 
-    private void EnsurePartyUser() => _partyUser ??= _party!.CreateLocalUser(_online!.Entity!);
+    private void EnsurePartyUser()
+    {
+        if (_partyUser is not null)
+        {
+            return;
+        }
+        using var lease = _online!.AcquireEntity()
+            ?? throw new InvalidOperationException("The PlayFab user has signed out.");
+        _partyUser = _party!.CreateLocalUser(lease.Entity);
+    }
 
     private PlatformResult EnsureAvailable()
     {
@@ -936,7 +952,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             return PlatformResult.Unavailable(_configuration.UnavailableReason);
         }
 
-        if (_online.Entity is null || string.IsNullOrEmpty(_online.EntityId))
+        if (!_online.IsSignedIn || string.IsNullOrEmpty(_online.EntityId))
         {
             var reason = _online.UnavailableReason;
 
@@ -997,7 +1013,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
            && _identity.CurrentUser is not null
            && _online.CanAttemptLogin
            && _online.CanRetrySignIn
-           && (_online.Entity is null || string.IsNullOrEmpty(_online.EntityId));
+           && (!_online.IsSignedIn || string.IsNullOrEmpty(_online.EntityId));
 
     private string UnavailableReason() => EnsureAvailable().Message ?? "Online play is not available in this build.";
 
@@ -1010,26 +1026,16 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
 
         var pending = new PendingRegions(cancellationToken);
-        lock (_waitGate)
-        {
-            _pendingRegions.Add(pending);
-        }
+        _pendingRegions.Add(pending);
         return pending.Completion.Task;
     }
 
-    private Task<T> AwaitOperationAsync<T>(PartyOperationId operation, CancellationToken cancellationToken)
+    private async Task<T> AwaitOperationAsync<T>(PartyOperationId operation, CancellationToken cancellationToken)
         where T : PartyOperationCompleted
     {
         var pending = new PendingOperation(typeof(T), cancellationToken);
-        lock (_waitGate)
-        {
-            _pendingOperations[operation] = pending;
-        }
-        return pending.Completion.Task.ContinueWith(
-            task => (T)task.Result,
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
+        _pendingOperations[operation] = pending;
+        return (T)await pending.Completion.Task.ConfigureAwait(false);
     }
 
     private Task<int> AwaitPeerAssignmentAsync(CancellationToken cancellationToken)
@@ -1039,12 +1045,8 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             return Task.FromResult(LocalPeerId);
         }
 
-        TaskCompletionSource<int> assignment;
-        lock (_waitGate)
-        {
-            assignment = _peerAssignment ??= new TaskCompletionSource<int>();
-            _peerAssignmentCancellation = cancellationToken;
-        }
+        var assignment = _peerAssignment ??= new TaskCompletionSource<int>();
+        _peerAssignmentCancellation = cancellationToken;
         return assignment.Task;
     }
 
@@ -1052,7 +1054,9 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
     {
         try
         {
-            await AwaitOperationAsync<PartyOperationCompleted>(operation, cancellationToken).ConfigureAwait(false);
+            // Teardown must stop waiting even when the frame pump is no longer running.
+            await AwaitOperationAsync<PartyOperationCompleted>(operation, cancellationToken)
+                .WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (IsPlatformException(ex) || ex is InvalidCastException or AggregateException)
         {
@@ -1083,12 +1087,6 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     private void CompleteCanceledOperations()
     {
-        var budget = _resetCancellations.Count;
-        while (budget-- > 0 && _resetCancellations.TryDequeue(out var cancel))
-        {
-            cancel();
-        }
-
         foreach (var pair in _pendingOperations.ToArray())
         {
             if (pair.Value.CancellationToken.IsCancellationRequested && _pendingOperations.Remove(pair.Key))
@@ -1717,6 +1715,24 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
     private static int? ReadPeerId(byte[] data)
         => data.Length >= 4 ? BinaryPrimitives.ReadInt32LittleEndian(data) : null;
 
+    private void OnLobbyConnectionLost(PlatformResult failure)
+    {
+        if (_disposed || _leaving || (!HasNetwork && _party is null))
+        {
+            return;
+        }
+
+        var peers = _peerToEndpoint.Keys.Where(id => id != LocalPeerId).ToArray();
+        _online?.Lobbies.Reset();
+        DisposeParty();
+        ResetSessionState();
+        foreach (var peerId in peers)
+        {
+            PeerLeft?.Invoke(peerId);
+        }
+        NetworkDestroyed?.Invoke(failure);
+    }
+
     private void OnNetworkDestroyed(PartyNetworkDestroyed destroyed)
     {
         if (_leaving)
@@ -1737,36 +1753,9 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
 
     private void ResetSessionState()
     {
-        Dictionary<PartyOperationId, PendingOperation> operations;
-        List<PendingRegions> regions;
-        TaskCompletionSource<int>? assignment;
-        CancellationToken assignmentCancellation;
-        lock (_waitGate)
-        {
-            operations = _pendingOperations;
-            _pendingOperations = [];
-            regions = _pendingRegions;
-            _pendingRegions = [];
-            assignment = _peerAssignment;
-            _peerAssignment = null;
-            assignmentCancellation = _peerAssignmentCancellation;
-            _peerAssignmentCancellation = default;
-        }
-        _resetCancellations.Enqueue(() =>
-        {
-            foreach (var pending in operations.Values)
-            {
-                pending.Completion.TrySetCanceled(pending.CancellationToken);
-            }
-
-            foreach (var pending in regions)
-            {
-                pending.Completion.TrySetCanceled(pending.CancellationToken);
-            }
-
-            assignment?.TrySetCanceled(assignmentCancellation);
-        });
-
+        var assignment = _peerAssignment;
+        var operations = _pendingOperations.Values.ToArray();
+        var regions = _pendingRegions.ToArray();
         HasNetwork = false;
         IsHost = false;
         LocalPeerId = 0;
@@ -1780,12 +1769,25 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         _localEndpoint = null;
         _localChat = null;
         _partyUser = null;
+        _peerAssignment = null;
+        _peerAssignmentCancellation = default;
         _leaving = false;
+        _pendingOperations.Clear();
+        _pendingRegions.Clear();
         _endpointToPeer.Clear();
         _peerToEndpoint.Clear();
         _entityToPeer.Clear();
         _mutedPeers.Clear();
         _restrictions.Clear();
+        assignment?.TrySetCanceled();
+        foreach (var pending in operations)
+        {
+            pending.Completion.TrySetCanceled();
+        }
+        foreach (var pending in regions)
+        {
+            pending.Completion.TrySetCanceled();
+        }
     }
 
     private void DisposeParty()
@@ -1796,6 +1798,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
         catch (Exception ex) when (IsPlatformException(ex))
         {
+            CrashLog.Mark($"party: manager teardown failed: {ex.Message}");
         }
 
         _party = null;
