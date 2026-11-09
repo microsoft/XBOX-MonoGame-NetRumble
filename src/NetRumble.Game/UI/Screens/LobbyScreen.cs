@@ -828,7 +828,7 @@ public sealed class LobbyScreen : Screen
 
         if (user is null)
         {
-            var signIn = await identity.SignInAsync(context.InteractiveSignIn);
+            var signIn = await identity.SignInAsync(SignInOptions.Interactive);
 
             if (!signIn.Succeeded)
             {

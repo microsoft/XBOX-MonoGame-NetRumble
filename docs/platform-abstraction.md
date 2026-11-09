@@ -20,9 +20,8 @@ is what made that replacement invisible to the game: no file in `NetRumble.Core`
 | Assembly | Contains | Replaceable |
 |---|---|---|
 | `NetRumble.Platform` | Interfaces, POCOs, enums. No dependencies of its own. | No. This is the contract. |
-| `NetRumble.Platform.Offline` | A complete local and no-op implementation | No. This is always the fallback. |
 | `NetRumble.Platform.GameCore` | Xbox services through XBOX GDK.NET, native handles, runtime lifetime | Yes. This is the disposable one. |
-| `NetRumble.Platform.PlayFab` | Native GDK.Net authentication, connected Lobby discovery and PlayFab user-data cloud saves | Yes |
+| `NetRumble.Platform.PlayFab` | Native GDK.Net authentication and connected Lobby discovery | Yes |
 | `NetRumble.Core` | Simulation, match flow, netcode messages | No |
 | `NetRumble.Game` | MonoGame rendering, input, audio, UI | No |
 
@@ -70,8 +69,7 @@ thread-pool completions needs the same treatment.
 This is the reason gameplay, UI and netcode code contain no locks and no dispatcher.
 
 PlayFab Lobby operations are issued and their state changes drained from that same
-runtime pump. The developer PlayFab decorator also owns a native runtime and pumps its
-Lobby client; adding PlayFab to offline does not enable multiplayer transport.
+GDK runtime pump.
 
 > [!IMPORTANT]
 > MonoGame installs no `SynchronizationContext`, so a bare `await` resumes on a thread-pool
@@ -79,15 +77,11 @@ Lobby client; adding PlayFab to offline does not enable multiplayer transport.
 > `GameThreadContext` and drains it at the start of `Update`. Use `ConfigureAwait(false)`
 > only for platform work that is meant to stay off the game thread.
 
-### 4. Absence is a normal condition
+### 4. Report unavailable services explicitly
 
-A machine with no GDK installed is a supported configuration, and it is how the front end
-and the practice match are developed. Providers report this through
-`IPlatformRuntime.IsRuntimeAvailable` and `Capabilities`. Best-effort services return
-`PlatformStatus.Unavailable` instead of throwing.
-
-The sample applies a two-tier policy. Multiplayer is gated and tells the player why.
-Achievements, saves and presence degrade to working no-ops.
+The GDK provider reports missing dependencies through `IPlatformRuntime.IsRuntimeAvailable`
+and `Capabilities`. Services return `PlatformStatus.Unavailable` instead of pretending
+to succeed. The game requires GDK sign-in before opening the main menu, including Practice.
 
 A capability flag means the whole path works end to end. The provider does not advertise
 `Invites` or `Presence` merely because an entry point binds.
@@ -106,7 +100,8 @@ Three things the sample supplies that XBOX GDK.NET does not:
 - **`Services/PumpDispatcher.cs`**, for invariant 3.
 - **`Interop/*RuntimeProbe.cs`**, for invariant 4. Three small self-contained probes that
   answer "is this runtime actually present?" before anything tries to use it. XBOX GDK.NET
-  reasonably assumes it runs on a machine that has a GDK, and this sample cannot.
+  assumes it runs on a machine that has a GDK; probes let this sample show a useful
+  sign-in failure instead of crashing when a dependency is missing.
 - A binding for process lifecycle notifications, which XBOX GDK.NET does not wrap.
 
 The cost: XBOX GDK.NET is a `ProjectReference` and is not on NuGet, so it became a
@@ -116,12 +111,11 @@ If a third implementation appears, the recipe is unchanged. Implement `IPlatform
 add one case to `PlatformProviderFactory.Create`, and delete the assembly you are
 replacing.
 
-## PlayFab composes as a layer
+## PlayFab belongs to the GDK session
 
-PlayFab cloud save and lobby discovery are orthogonal to the transport and to the platform
-runtime. They are composed over whichever provider is active rather than being a provider
-mode of their own, so `--platform=offline --playfab-title=<id>` works without needing an enum
-value for every combination.
+The GDK provider owns one Xbox-backed PlayFab identity for Party and Lobby. A separate
+PlayFab title can be selected with `--playfab-title=<id>`, without changing the platform
+provider or its account requirement. Cloud saves use GDK `XGameSaveFiles`.
 
 ## Verifying a provider
 
@@ -131,7 +125,6 @@ exercises the transport and measures pump cost.
 
 ```powershell
 dotnet run --project tools\NetRumble.PlatformSpike
-dotnet run --project tools\NetRumble.PlatformSpike -- --platform=offline
 dotnet run --project tools\NetRumble.PlatformSpike -- --platform=gamecore
 ```
 
@@ -147,9 +140,6 @@ both:
 - `packaging/MicrosoftGame.config`, which is where an unpackaged GDK process reads its
   title identity. Without it, `XGameGetXboxTitleId` returns `ERROR_NOT_FOUND` and every
   service check behind it fails too.
-
-`--platform=offline` reports three failures on a machine that has the GDK installed. See
-[Troubleshooting](troubleshooting.md#the-offline-spike-reports-three-failures-on-a-gdk-machine).
 
 ## Measured cost
 

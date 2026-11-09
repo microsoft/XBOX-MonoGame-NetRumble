@@ -9,9 +9,8 @@ namespace NetRumble.Platform.GameCore.Interop;
 /// <remarks>
 /// <para>
 /// Without this, the first call into a missing GDK throws from deep inside a service. A
-/// dev box with no GDK is a supported configuration - it is how the practice match and
-/// the whole front end are developed - so absence must be a clean, early, reported
-/// condition.
+/// missing native dependency must instead be a clean, early, reported condition on
+/// the sign-in screen.
 /// </para>
 /// <para>
 /// <b>What is being probed.</b> <c>xgameruntime.thunks.dll</c>, the DLL GDK.Net binds

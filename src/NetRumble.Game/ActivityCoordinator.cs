@@ -288,9 +288,7 @@ public sealed class ActivityCoordinator
                 return;
             }
 
-            // Unavailable is not a failure to report or retry: it is a provider with no
-            // activity support at all - offline or a desktop build with no GDK -
-            // and retrying it would never do anything but spin.
+            // Unavailable means activity support is absent, so retrying would only spin.
             if (result.Status == PlatformStatus.Unavailable)
             {
                 _appliedRevision = revision;

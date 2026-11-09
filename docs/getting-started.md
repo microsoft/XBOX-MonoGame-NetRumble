@@ -10,16 +10,16 @@ in this folder.
 | Windows 10 or 11 | The Microsoft GDK, PlayFab and PlayFab Party binaries are Windows only. |
 | .NET 9 SDK or later | The desktop game targets `net9.0-windows`. |
 | [XBOX GDK.NET](https://github.com/gaming-microsoft/gdk-dotnet), cloned beside this repository | A managed projection of the GDK, PlayFab and Party. Every project in the solution reaches the platform through it. |
-| A Microsoft GDK edition | Needed for any GDK-backed feature. The game still builds and runs without one. |
+| A Microsoft GDK edition | Required to run the game, including Practice. The source can still be built without the installed native runtime. |
+| An XBOX account with access to this sample's title and sandbox | GDK sign-in is required before entering the main menu. |
 
 XBOX GDK.NET is not published on NuGet and the solution consumes it as a `ProjectReference`,
 so it is a hard prerequisite for **every** build rather than only the XBOX Series X|S one.
 Set the `GdkNetRoot` MSBuild property if your checkout lives somewhere other than beside
 this repository.
 
-All PlayFab calls use GDK.Net's native wrappers. PlayFab-enabled offline developer
-runs also require the Gaming Runtime and the native Core, Services and Multiplayer
-libraries. An ordinary offline run without PlayFab still works without the GDK.
+All PlayFab calls use GDK.Net's native wrappers and the Gaming Runtime, with the
+native Core, Services and Multiplayer libraries.
 The desktop build stages available native libraries from `GameDKCoreLatest`; console
 packaging stages the Xbox copies instead.
 
@@ -50,12 +50,10 @@ set inside a project file. See
 With a GDK installed and an XBOX account available, the game opens the acquire-user
 screen, signs in, and lands on the main menu showing your gamertag.
 
-If sign-in fails, the screen reports the stage it reached and the reason. Choose
-**Continue Offline** to reach Practice, which needs no account and no network.
-
-With no GDK installed, the game starts in the offline provider, reports the runtime as
-unavailable, and offers Practice. This is a supported configuration and is how the front
-end and the single-player match are developed.
+If sign-in fails, the screen reports the stage it reached and the reason, and lets you
+retry. The main menu and Practice remain unavailable until GDK sign-in succeeds.
+If the native runtime is missing, install the Microsoft GDK before trying to play.
+After signing in, choose **Practice** for a single-player match against bots.
 
 ## Online features need access to this title
 
@@ -63,8 +61,8 @@ Sign-in, lobby discovery, Party networking, privileges, achievements and presenc
 against this sample's own sandbox and title. Reaching them requires an XBOX publishing
 relationship and a test account provisioned in that sandbox.
 
-Without that access you can still clone, build and play **Practice**, which needs no GDK,
-no PlayFab title and no XBOX account.
+Without that access you can still clone, build and inspect the source. Playing requires
+GDK sign-in; Practice uses the same account requirement as the rest of the game.
 
 Join the [XBOX Developer Program](https://developer.microsoft.com/en-us/games/) to begin
 the onboarding process.
@@ -80,7 +78,7 @@ deliberately retargeting the sample at a title of your own.
 
 | Page | Read it when |
 |---|---|
-| [Run modes](run-modes.md) | You want two instances playing each other, an unattended run, or the offline provider. |
+| [Run modes](run-modes.md) | You want multiplayer, Practice, or an unattended run. |
 | [Feature support](feature-support.md) | You want to know which features work in which environment. |
 | [Platform abstraction](platform-abstraction.md) | You want to reuse the provider boundary in your own game. |
 | [Windows packaging](windows-packaging.md) | You want an installable package on the same PC. |

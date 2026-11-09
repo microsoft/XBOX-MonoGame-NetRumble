@@ -13,9 +13,9 @@ namespace NetRumble.Platform;
 /// own the sequencing, the game owns the UI.
 /// </para>
 /// <para>
-/// <b>Sign-in is required for multiplayer.</b> Party is the transport and Lobby the
+/// <b>GDK sign-in is required to enter the game.</b> Party is the transport and Lobby the
 /// matchmaking, and both need a PlayFab user, so there is no "play online as guest".
-/// The practice match needs no identity at all.
+/// Practice is single-player but uses the same signed-in platform account.
 /// </para>
 /// </remarks>
 public interface IIdentityService
@@ -150,8 +150,7 @@ public interface IIdentityService
     /// <see cref="PlatformAccountChange.SignedInAgain"/>, and everything downstream of
     /// <see cref="CurrentUser"/> - the lobby roster, the identity a peer is sent, the
     /// name on a save - would otherwise carry the name read at sign-in for the rest of
-    /// the session. Providers that cannot change identity behind the title's back, such
-    /// as the offline one, are correct to do nothing.
+    /// the session.
     /// </remarks>
     Task RefreshUserAsync() => Task.CompletedTask;
 }
@@ -200,18 +199,6 @@ public readonly record struct SignInOptions
     /// False performs a silent-only attempt.
     /// </summary>
     public bool AllowUserInterface { get; init; }
-
-    /// <summary>
-    /// Developer override selecting a per-instance PlayFab custom id
-    /// (<c>--pf-user=&lt;name&gt;</c> / <c>PF_CUSTOM_ID</c>).
-    /// </summary>
-    /// <remarks>
-    /// The GDK binds one Xbox user per PC, so two signed-in GDK instances cannot coexist
-    /// on one machine and Party could otherwise only be tested with two PCs. Providers
-    /// <b>must</b> ignore this outside debug desktop builds — it reaches PlayFab with no
-    /// Xbox identity behind it and creates the account on first use.
-    /// </remarks>
-    public string? DeveloperCustomId { get; init; }
 
     public static SignInOptions Interactive => new() { AllowUserInterface = true };
     public static SignInOptions Silent => new() { AllowUserInterface = false };

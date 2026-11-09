@@ -3,7 +3,6 @@ using GDK.Net;
 using GDK.Net.PlayFab;
 using NetRumble.Platform;
 using NetRumble.Platform.Networking;
-using NetRumble.Platform.Offline;
 using NetRumble.Platform.PlayFab;
 using GDK.Net.PlayFab.Multiplayer;
 using GDK.Net.PlayFab.Party;
@@ -33,24 +32,16 @@ internal static class PlayFabChecks
         var placeholderConfig = new PlayFabConfiguration { TitleId = PlayFabConfiguration.PlaceholderTitleId };
         using (var placeholder = new PlayFabOnlineServices(placeholderConfig))
         {
-            var login = await placeholder.SignInWithCustomIdAsync("developer");
+            var login = await placeholder.SignInWithXboxUserAsync(null!, createAccount: false);
             Check("placeholder refuses login before any native call", login.Status == PlatformStatus.Unavailable);
             Check("a placeholder cannot publish an online identity", !placeholder.IsSignedIn && placeholder.EntityId.Length == 0);
-            Check("placeholder refuses cloud saves without native calls",
-                (await placeholder.GameSaves.SaveCloudAsync("settings", new byte[1])).Status == PlatformStatus.Unavailable);
-            Check("placeholder refuses cloud reads without native calls",
-                (await placeholder.GameSaves.LoadCloudAsync("settings")).Status == PlatformStatus.Unavailable);
         }
         using (var services = new PlayFabOnlineServices(config))
         {
             using var canceled = new CancellationTokenSource();
             canceled.Cancel();
-            var login = await services.SignInWithCustomIdAsync("developer", canceled.Token);
-#if DEBUG
+            var login = await services.SignInWithXboxUserAsync(null!, createAccount: false, canceled.Token);
             Check("canceled login never initializes native PlayFab", login.WasCanceled);
-#else
-            Check("Release forbids custom-ID login", login.Status == PlatformStatus.Unavailable);
-#endif
             var notifications = 0;
             services.SessionChanged += session => { if (session is null) { notifications++; } };
             services.SignOut();
@@ -93,43 +84,6 @@ internal static class PlayFabChecks
             PlayFabFailure.FromException(new DllNotFoundException("PlayFabServices"), "missing").Status == PlatformStatus.Unavailable);
         Check("cancellation stays cancellation",
             PlayFabFailure.FromException(new OperationCanceledException(), "canceled").WasCanceled);
-
-        var acquired = 0;
-        var saves = new PlayFabGameSaveService(config, () => { acquired++; return null; });
-        var oversized = await saves.SaveCloudAsync("settings", new byte[PlayFabGameSaveService.MaxCloudBytes + 1]);
-        Check("oversized cloud writes are rejected before acquiring a user", oversized.Failed && acquired == 0);
-        var emptyKey = await saves.LoadCloudAsync("");
-        Check("empty save keys fail before acquiring a user", emptyKey.Failed && acquired == 0);
-        var edge = await saves.SaveCloudAsync("settings", new byte[PlayFabGameSaveService.MaxCloudBytes]);
-        Check("exactly 750 bytes pass size validation", edge.Status == PlatformStatus.NotSignedIn && acquired == 1);
-        Check("750 bytes encode to the 1000-character service limit",
-            Convert.ToBase64String(new byte[PlayFabGameSaveService.MaxCloudBytes]).Length == 1000);
-        var signedOutLoad = await saves.LoadCloudAsync("settings");
-        Check("signed-out reads require a native user", signedOutLoad.Status == PlatformStatus.NotSignedIn);
-        using (var cancel = new CancellationTokenSource())
-        {
-            cancel.Cancel();
-            Check("canceled cloud writes are canceled", (await saves.SaveCloudAsync("settings", new byte[1], cancel.Token)).WasCanceled);
-            Check("canceled cloud reads are canceled", (await saves.LoadCloudAsync("settings", cancel.Token)).WasCanceled);
-        }
-
-        var bytes = Enumerable.Range(0, 256).Select(i => (byte)i).ToArray();
-        var data = new Dictionary<string, UserDataRecord>
-        {
-            ["settings"] = new() { Value = Convert.ToBase64String(bytes) },
-            ["empty"] = new() { Value = "" },
-            ["corrupt"] = new() { Value = "not valid Base64!" },
-        };
-        var read = PlayFabGameSaveService.ReadUserDataValue(data, "settings");
-        Check("existing Base64 cloud data round-trips every byte", read.Succeeded && read.Value!.SequenceEqual(bytes));
-        Check("a missing save is a successful empty payload",
-            PlayFabGameSaveService.ReadUserDataValue(data, "missing").Value is { Length: 0 });
-        Check("an empty record is a successful empty payload",
-            PlayFabGameSaveService.ReadUserDataValue(data, "empty").Value is { Length: 0 });
-        Check("an absent data dictionary is a successful empty payload",
-            PlayFabGameSaveService.ReadUserDataValue(null, "missing").Value is { Length: 0 });
-        var corrupt = PlayFabGameSaveService.ReadUserDataValue(data, "corrupt");
-        Check("corrupt saves fail explicitly", corrupt.Failed && corrupt.Result.Diagnostics?.Contains("Base64") == true);
 
         Check("join codes normalize case", PlayFabLobbyClient.IsJoinCode("abcde"));
         Check("join-code filters retain the deployed search key",
@@ -181,25 +135,7 @@ internal static class PlayFabChecks
         Check("cached near-expiry tokens cannot cause a refresh every frame",
             PlayFabLobbyClient.RefreshAt(new EntityToken { Expiration = now.AddMinutes(1) }, now) == now.AddSeconds(30));
 
-        await using (var provider = new PlayFabPlatformProvider(new OfflinePlatformProvider(),
-            placeholderConfig, () => throw new InvalidOperationException("Must not start"), _ => { }))
-        {
-            Check("placeholder composition does not start the native runtime", (await provider.Runtime.InitializeAsync()).Succeeded);
-            Check("placeholder composition does not advertise cloud save",
-                !provider.Capabilities.HasFlag(PlatformCapabilities.CloudSave));
-        }
-        await using (var provider = new PlayFabPlatformProvider(new OfflinePlatformProvider(), config,
-            () => throw new PlatformNotSupportedException("No Gaming Runtime"), _ => { }))
-        {
-            var started = await provider.Runtime.InitializeAsync();
-            Check("developer PlayFab reports a missing native runtime", started.Status == PlatformStatus.Unavailable);
-            Check("missing native runtime does not advertise cloud save",
-                !provider.Capabilities.HasFlag(PlatformCapabilities.CloudSave));
-            var user = await provider.Identity.SignInAsync();
-            Check("local identity still works without PlayFab credentials", user.Succeeded && user.Value?.EntityId == "");
-        }
-
-        Console.WriteLine("    SKIP live authentication, user data and connected lobbies: require a configured native runtime and test accounts.");
+        Console.WriteLine("    SKIP live authentication and connected lobbies: require a configured native runtime and test accounts.");
         Console.WriteLine();
         return failures == 0 ? 0 : 1;
     }

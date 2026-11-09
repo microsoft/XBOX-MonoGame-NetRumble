@@ -27,8 +27,7 @@ internal static class Program
         var mode = PlatformProviderFactory.ResolveMode(args);
 
         // Resolved from --playfab-title=<id> or NETRUMBLE_PLAYFAB_TITLE_ID. With a real
-        // id GameCore gains PlayFab Party/Lobby; other providers gain PlayFab cloud
-        // save and an entity id through the developer decorator.
+        // id GameCore gains PlayFab Party/Lobby.
         var playFab = PlayFabConfiguration.Resolve(args);
 
         Console.WriteLine("NetRumble platform spike");
@@ -59,10 +58,10 @@ internal static class Program
         MatchChecks.Run();
         ReplicationChecks.Run();
         PartyTransportChecks.Run();
-        PartyInteropChecks.Run(mode);
-        XblInteropChecks.Run(mode);
+        PartyInteropChecks.Run();
+        XblInteropChecks.Run();
         await PlatformServicesChecks.Run(platform).ConfigureAwait(false);
-        await GameCorePartyAndActivityChecks.Run(mode).ConfigureAwait(false);
+        await GameCorePartyAndActivityChecks.Run().ConfigureAwait(false);
         await PlayFabChecks.Run().ConfigureAwait(false);
         if (await GameSaveFilesChecks.Run().ConfigureAwait(false) != 0)
         {
@@ -86,8 +85,8 @@ internal static class Program
 
         if (result.Failed && !platform.Runtime.IsRuntimeAvailable)
         {
-            // Expected on a box without the GDK. Not a spike failure.
-            Console.WriteLine("    (no native runtime installed - this is a supported configuration)");
+            // The harness can verify failure paths even though the game requires the GDK.
+            Console.WriteLine("    (no native runtime installed - gameplay requires the Microsoft GDK)");
         }
 
         Console.WriteLine();
@@ -195,9 +194,9 @@ internal static class Program
     {
         Console.WriteLine("Provider modes");
 
-        Check("only Auto, Offline and GameCore are supported",
+        Check("only Auto and GameCore are supported",
             Enum.GetValues<PlatformProviderMode>().SequenceEqual(
-                [PlatformProviderMode.Auto, PlatformProviderMode.Offline, PlatformProviderMode.GameCore]));
+                [PlatformProviderMode.Auto, PlatformProviderMode.GameCore]));
         Check("no mode selects Auto",
             PlatformProviderFactory.ResolveMode([]) == PlatformProviderMode.Auto);
 
@@ -211,8 +210,8 @@ internal static class Program
             PlatformProviderFactory.ResolveMode(["--platform=unsupported"]) == PlatformProviderMode.Auto);
         Check("an undefined numeric mode selects Auto",
             PlatformProviderFactory.ResolveMode(["--platform=3"]) == PlatformProviderMode.Auto);
-        Check("Offline never runs native GDK checks",
-            !GdkCheckGate.RunsNativeGdk(PlatformProviderMode.Offline));
+        Check("an undefined intermediate numeric mode selects Auto",
+            PlatformProviderFactory.ResolveMode(["--platform=1"]) == PlatformProviderMode.Auto);
 
         Console.WriteLine();
     }

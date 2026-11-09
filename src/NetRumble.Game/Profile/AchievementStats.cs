@@ -26,10 +26,6 @@ namespace NetRumble.Game.Profile;
 /// bit sets. That can over-count if the same match is somehow recorded twice, and cannot
 /// lose progress - the right way round for an achievement counter.
 /// </para>
-/// <para>
-/// <b>Size.</b> Five integers, well inside the 750 bytes a PlayFab user-data value allows
-/// once Base64-encoded.
-/// </para>
 /// </remarks>
 public sealed class AchievementStats
 {

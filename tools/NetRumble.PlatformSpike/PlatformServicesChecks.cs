@@ -9,31 +9,13 @@ using NetRumble.Platform;
 /// <para>
 /// <see cref="XblInteropChecks"/> proves the native ABI signatures are correct against
 /// the real <c>Microsoft.Xbox.Services.C.Thunks.dll</c>. This class proves the other
-/// hard requirement: that every one of these services degrades cleanly - never an
-/// exception, and exactly the documented outcome, whether that is a failed
-/// <see cref="PlatformResult"/> or a deliberate fail-open success - when there is no
-/// signed-in Xbox account, which is exactly the state of this dev box and a supported
-/// configuration on a real one too (see <c>docs/design-notes.md</c>).
+/// hard requirement: that every one of these services reports its documented outcome
+/// without throwing when there is no signed-in Xbox account. The game remains at the
+/// sign-in screen in that state.
 /// </para>
 /// <para>
-/// Not every check below expects failure, and not every check expects the same thing
-/// from every provider. Several of these services are documented, in their own remarks,
-/// to fail <i>open</i> rather than closed when no platform context is available at all -
-/// friends queries, text verification and privacy evaluation all follow the Godot
-/// source's "nobody to check against, so let it through" contract. Asserting the wrong
-/// direction here would be worse than not asserting anything, so each check below names
-/// which contract it expects and why.
-/// </para>
-/// <para>
-/// <b>Expectations are derived from the provider, not hard-coded.</b> This class used to
-/// assert GDK behaviour unconditionally, which made <c>--platform=offline</c> report
-/// false failures: <c>OfflinePrivacyService.RefreshListsAsync</c> correctly succeeds,
-/// because there are no mute or avoid lists to fetch offline and therefore nothing that
-/// could fail, whereas <c>GameCorePrivacyService</c> correctly fails, because it cannot
-/// reach lists it is supposed to have. Both are right for their provider. Each check
-/// that differs now asks <see cref="IPlatformProvider.Capabilities"/> whether this
-/// provider claims to back the service at all, and asserts the matching contract - so
-/// the harness tests the provider it was given rather than the one it assumed.
+/// Social queries may return empty results, while moderation and privacy must fail
+/// closed without a platform context. Each check names the contract it expects.
 /// </para>
 /// <para>
 /// None of these checks can reach a PASS that proves a successful unlock, a real
@@ -59,12 +41,7 @@ internal static class PlatformServicesChecks
 
     private static async Task CheckPrivileges(IPrivilegeService privileges)
     {
-        // Multiplayer/Communications: no signed-in user means XUserCheckPrivilege has
-        // no XUserHandle to check, so the service must fail rather than guess. This is
-        // the fail-open-vs-fail-closed boundary called out in privilege_service.gd: the
-        // *call* fails closed (deny), but the *feature gate* built on top of it is what
-        // decides whether that is treated as "assume allowed" (offline single-player
-        // still works) or "assume denied" (do not let comms silently open).
+        // Without an XUserHandle, privilege checks must deny rather than guess.
         var multiplayer = await privileges.CheckAsync(GamePrivilege.Multiplayer).ConfigureAwait(false);
         Check("Multiplayer privilege check completes without throwing", true);
         Console.WriteLine($"    ---- Multiplayer: allowed={multiplayer.Allowed} reason={multiplayer.Reason} \"{multiplayer.Message}\"");
@@ -115,19 +92,15 @@ internal static class PlatformServicesChecks
 
         // XR-018 fails closed on the GDK provider: no Xbox Services context there means a
         // moderation service that is not answering, not an absent audience, and
-        // player-authored text must not be published unchecked. The offline provider has
-        // no XBOX network to publish to and keeps its passthrough contract.
-        var expectPassthrough = platform.Moderation.GetType().Name != "GameCoreModerationService";
+        // player-authored text must not be published unchecked.
         var verify = await moderation.VerifyTextAsync("hello there").ConfigureAwait(false);
         Check("Text verification holds text back without an Xbox Services context",
-            expectPassthrough
-                ? verify.Succeeded && verify.Value == "hello there"
-                : verify.Failed && verify.Status == PlatformStatus.Unavailable);
+            verify.Failed && verify.Status == PlatformStatus.Unavailable);
         Console.WriteLine($"    ---- {verify}");
 
         // Reporting and profile cards are the opposite direction from verification:
         // both reach out to a service, so neither may report success it did not get,
-        // whether the provider lacks a context (GDK) or lacks the service (offline).
+        // when the provider lacks a context.
         var report = await moderation.ReportPlayerAsync("0", PlayerReportType.Cheating).ConfigureAwait(false);
         Check("Player report does not silently succeed without a signed-in user", report.Failed);
 
@@ -139,27 +112,15 @@ internal static class PlatformServicesChecks
     {
         var privacy = platform.Privacy;
 
-        // The one genuinely provider-dependent contract in this file, and the reason
-        // --platform=offline used to report a false failure. A provider that backs
-        // privacy has real mute and avoid lists to fetch and must fail when it cannot
-        // reach them; a provider that does not has no lists at all, so there is nothing
-        // to fail at and succeeding is the honest answer. Assert whichever one this
-        // provider signed up for.
-        var backsPrivacy = platform.Capabilities.HasFlag(PlatformCapabilities.Privacy);
+        // A missing user cannot authorize access to mute and avoid lists.
         var refresh = await privacy.RefreshListsAsync().ConfigureAwait(false);
 
-        Check(
-            backsPrivacy
-                ? "Mute/avoid list refresh fails cleanly without a signed-in user"
-                : "Mute/avoid list refresh succeeds trivially on a provider with no lists",
-            backsPrivacy ? refresh.Failed : refresh.Succeeded);
+        Check("Mute/avoid list refresh fails cleanly without a signed-in user", refresh.Failed);
         Console.WriteLine($"    ---- {refresh}");
 
         // Fails closed (XR-045/XR-046). The GDK provider is only reached on a live Xbox
         // session, where an unreachable privacy service means the title cannot show that
-        // peer-to-peer communication is permitted - so it must not happen. Offline
-        // play never comes through here; it reaches OfflinePrivacyService, which still
-        // allows all.
+        // peer-to-peer communication is permitted - so it must not happen.
         var evaluate = await privacy.EvaluateAsync(["0"]).ConfigureAwait(false);
         Check("Permission evaluation returns a deny-all verdict without a signed-in user",
             evaluate.Succeeded && evaluate.Value is { Count: 1 } v && v["0"] == PrivacyVerdict.DenyAll);

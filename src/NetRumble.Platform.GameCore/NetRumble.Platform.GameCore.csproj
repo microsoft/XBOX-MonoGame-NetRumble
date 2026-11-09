@@ -58,7 +58,6 @@
   <ItemGroup>
     <ProjectReference Include="$(GdkNetProject)" />
     <ProjectReference Include="..\NetRumble.Platform\NetRumble.Platform.csproj" />
-    <ProjectReference Include="..\NetRumble.Platform.Offline\NetRumble.Platform.Offline.csproj" />
     <ProjectReference Include="..\NetRumble.Platform.PlayFab\NetRumble.Platform.PlayFab.csproj" />
   </ItemGroup>
 
@@ -77,9 +76,8 @@
     thunks DLL and we build one from the same stubs.
 
     A missing GDK stays a warning, not an error, exactly as it was for the shim: the
-    offline provider is complete, and the practice match and the entire front end are
-    developed without a GDK. GameRuntimeProbe reports the runtime as unavailable and the
-    game degrades to offline.
+    code can still be built without the GDK installed. GameRuntimeProbe reports the
+    runtime as unavailable, and the sign-in screen explains why play cannot start.
   -->
   <PropertyGroup>
     <GameRuntimeThunks Condition="'$(GameRuntimeThunks)' == ''">$(GameDKCoreLatest)windows\bin\x64\xgameruntime.thunks.dll</GameRuntimeThunks>

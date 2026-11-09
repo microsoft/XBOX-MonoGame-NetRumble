@@ -10,7 +10,7 @@ For MonoGame itself, see the [MonoGame documentation](https://docs.monogame.net/
 | Page | Contents |
 |---|---|
 | [Getting started](getting-started.md) | Prerequisites, first build, first run, and what online access requires |
-| [Run modes](run-modes.md) | Desktop, offline, a separate PlayFab title, unattended runs, and the platform spike |
+| [Run modes](run-modes.md) | GDK startup, Practice, a separate PlayFab title, unattended runs, and the platform spike |
 | [Feature support](feature-support.md) | Which features work in which environment, and the scope of the game itself |
 
 ## Reference

@@ -1,7 +1,6 @@
 using NetRumble.Platform.Diagnostics;
 using NetRumble.Platform.GameCore;
 using NetRumble.Platform.GameCore.Interop;
-using NetRumble.Platform.Offline;
 using NetRumble.Platform.PlayFab;
 
 namespace NetRumble.Platform.Composition;
@@ -17,15 +16,14 @@ namespace NetRumble.Platform.Composition;
 /// </para>
 /// <para>
 /// It is also the only assembly that references the concrete providers. Keeping it
-/// separate from <c>NetRumble.Game</c> means a headless test host can compose an
-/// offline provider without dragging MonoGame in.
+/// separate from <c>NetRumble.Game</c> means a headless test host can exercise the
+/// platform without dragging MonoGame in.
 /// </para>
 /// </remarks>
 public static class PlatformProviderFactory
 {
     /// <summary>
-    /// Builds a provider for the requested mode, falling back to offline whenever the
-    /// native runtime is missing.
+    /// Builds the GDK provider. Missing native dependencies are reported by its runtime.
     /// </summary>
     /// <param name="mode">
     /// Which implementation to prefer. <see cref="PlatformProviderMode.Auto"/> is what
@@ -37,7 +35,7 @@ public static class PlatformProviderFactory
     /// <param name="playFab">
     /// When supplied with a real title id, enables PlayFab-backed services. The GDK
     /// provider consumes this directly so its Xbox user produces exactly one PlayFab
-    /// identity; the other providers are wrapped by <see cref="PlayFabPlatformProvider"/>.
+    /// identity.
     /// Null, or the placeholder title, leaves the provider untouched.
     /// </param>
     public static IPlatformProvider Create(
@@ -45,44 +43,11 @@ public static class PlatformProviderFactory
         string? saveRoot = null,
         PlayFabConfiguration? playFab = null)
     {
-        var provider = CreateCore(mode, saveRoot, playFab);
-
-        // PlayFab is a layer, not a mode. The offline provider can opt into native
-        // PlayFab identity and cloud save without changing its local-only transport.
-        //
-        // A placeholder title id is skipped entirely rather than wrapped and disabled:
-        // an unwrapped provider reports its capabilities honestly for free. GameCore is
-        // also skipped, but for the opposite reason: it owns a GameCoreOnlineSession
-        // directly, so wrapping it here would add a second PlayFabIdentityService and a
-        // second login for the same player.
-        return provider is GameCorePlatformProvider || playFab is null || playFab.IsPlaceholder
-            ? provider
-            : new PlayFabPlatformProvider(provider, playFab,
-                () => GameRuntimeHost.EnsureInitialized() && GameRuntimeHost.Current is { } runtime
-                    ? runtime
-                    : throw new PlatformNotSupportedException(GameRuntimeProbe.UnavailableReason),
-                _ => GameRuntimeHost.Shutdown());
-    }
-
-    private static IPlatformProvider CreateCore(
-        PlatformProviderMode mode,
-        string? saveRoot,
-        PlayFabConfiguration? playFab)
-    {
         return mode switch
         {
-            PlatformProviderMode.Offline => new OfflinePlatformProvider(saveRoot),
-
-            PlatformProviderMode.GameCore => new GameCorePlatformProvider(saveRoot, playFab),
-
-            // Auto: use the GDK when it is genuinely installed, otherwise run offline.
-            // A dev box without the GDK is a supported configuration, so this is a
-            // normal outcome and not a warning.
-            PlatformProviderMode.Auto => GameCorePlatformProvider.IsRuntimePresent
-                ? new GameCorePlatformProvider(saveRoot, playFab)
-                : new OfflinePlatformProvider(saveRoot),
-
-            _ => new OfflinePlatformProvider(saveRoot),
+            PlatformProviderMode.Auto or PlatformProviderMode.GameCore
+                => new GameCorePlatformProvider(saveRoot, playFab),
+            _ => throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported platform mode."),
         };
     }
 
@@ -156,8 +121,7 @@ public static class PlatformProviderFactory
     }
 
     /// <summary>
-    /// Resolves the mode from the command line, so a developer can force offline on a
-    /// machine that does have the GDK: <c>--platform=offline</c>.
+    /// Resolves the mode from the command line. Auto and GameCore both use the GDK.
     /// </summary>
     public static PlatformProviderMode ResolveMode(IReadOnlyList<string> commandLineArgs)
     {
@@ -183,12 +147,9 @@ public static class PlatformProviderFactory
 
 public enum PlatformProviderMode
 {
-    /// <summary>Use the native runtime when present, otherwise offline.</summary>
+    /// <summary>Use the GDK provider.</summary>
     Auto = 0,
 
-    /// <summary>Force the offline provider, even with the GDK installed.</summary>
-    Offline,
-
     /// <summary>Force the GDK provider; fails visibly when the runtime is missing.</summary>
-    GameCore,
+    GameCore = 2,
 }

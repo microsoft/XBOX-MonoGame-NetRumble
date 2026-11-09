@@ -110,6 +110,7 @@ internal sealed class Autopilot
     private float _playStarted;
     private int _peers;
     private bool _readySent;
+    private bool _signInRequested;
     private bool _failed;
 
     private int _remotePeerId;
@@ -274,28 +275,30 @@ internal sealed class Autopilot
     // --- Stages ------------------------------------------------------------
 
     /// <summary>
-    /// Skips the acquire-user screen.
+    /// Waits for the normal sign-in screen to hand off to the menu.
     /// </summary>
     /// <remarks>
-    /// Going straight to the main menu is the same thing that screen's "Continue Offline"
-    /// button does. There is no account to sign in to on a dev box, and waiting for a
-    /// sign-in that cannot succeed would burn the whole run in the first screen.
+    /// Unattended runs obey the same account requirement as player-driven runs.
     /// </remarks>
     private void Booting(UiContext context)
     {
-        // A short settle first: the acquire-user screen kicks off a silent sign-in on
-        // load, and replacing it mid-flight would tear down a task still running.
-        if (_elapsed < 2f)
+        if (!_signInRequested && context.Game.PlatformSettled
+            && context.Screens.Current is AcquireUserScreen acquireUser)
         {
+            _signInRequested = true;
+            acquireUser.BeginSignIn(context);
+        }
+
+        if (context.Screens.Current is not MainMenuScreen || context.Platform.Identity.CurrentUser is null)
+        {
+            if (_elapsed >= PeerTimeout.TotalSeconds)
+            {
+                Fail("GDK sign-in did not reach the main menu.");
+            }
             return;
         }
 
         Log($"role={_role} transport={context.Platform.Name}");
-
-        if (context.Screens.Current is not MainMenuScreen)
-        {
-            context.Screens.ReplaceAll(new MainMenuScreen());
-        }
 
         Enter(Stage.Menu);
     }

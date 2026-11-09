@@ -33,31 +33,30 @@ as a contract rather than as an implementation detail.
 
 The result is that gameplay, UI and netcode contain no locks and no dispatcher.
 
-### An absent platform is a supported configuration
+### Require the platform without hiding failures
 
-A machine with no GDK installed is how the front end and the practice match are developed,
-so the provider reports availability and capabilities explicitly rather than pretending to
-succeed. Multiplayer is gated with a reason the player can read. Achievements, saves and
-presence degrade to working no-ops.
+The GDK provider reports availability and capabilities explicitly rather than pretending
+to succeed. GDK sign-in gates the main menu and all play, including Practice. A missing
+runtime or failed sign-in stays on the sign-in screen with a reason the player can read.
+Practice keeps its local simulation but uses the signed-in account for settings and progress.
 
 A capability flag means the whole path works end to end. The provider does not advertise
 `Invites` or `Presence` merely because an entry point binds, because a flag that means
 "this export resolved" is worse than no flag.
 
-### Compose orthogonal services as layers
+### Keep one platform session
 
-PlayFab cloud save and lobby discovery are independent of the transport, so they compose
-over whichever provider is active. They use the native GDK runtime even in developer
-modes. That is what makes
-`--platform=offline --playfab-title=<id>` work without an enum value for every combination of
-transport and cloud tier.
+The GDK provider owns identity, native runtime lifetime, Party and Lobby. Both `auto`
+and `gamecore` startup modes construct that provider. A missing runtime never selects
+another implementation or creates a guest identity. Local save storage and MonoGame
+input support belong to the GDK provider rather than an alternate platform.
 
 ### Use one native PlayFab identity
 
 Xbox login uses `PlayFabLocalUser.LoginAsync` once. The resulting entity serves Party,
-Lobby and the typed `PlayerDataManagement` user-data wrappers. No second Xbox-token
+and Lobby. No second Xbox-token
 exchange, client session ticket, custom HTTP client or REST request DTO is needed.
-Custom-ID authentication uses the native Authentication wrapper and remains Debug-only.
+There is no alternate developer authentication path.
 
 The service owns the native entity; cloud operations borrow duplicate handles so signing
 out cannot dispose the identity underneath an in-flight call. Shutdown cancels work and
@@ -79,8 +78,7 @@ is released. Only final shutdown actively drains completions while waiting. Lobb
 disposes Party and clears pending session work before notifying the game; expired
 sign-in also clears the shared PlayFab identity so another Host or Join can authenticate.
 
-The user-data payload format is unchanged: Base64 under the existing keys, with a
-750-byte limit. The GDK provider always uses XGameSaveFiles, through GDK.Net's
+The GDK provider uses XGameSaveFiles, through GDK.Net's
 `GameSaveFiles.GetFolderWithUiAsync`. It obtains the signed-in user's save folder on
 the first file operation; the GDK handles synchronization outside the title process.
 Each save key names a file directly in the SDK-provided directory.
@@ -273,13 +271,6 @@ This class of bug is the strongest argument for using a maintained managed proje
 instead of hand-written interop. None of those signatures is this repository's to get wrong
 any more.
 
-### Do not conclude a native SDK is usable from its export list
-
-The native PlayFab DLLs export the authentication functions you would want to call. They
-export no `XAsync*` or `XTaskQueue*` symbols, so managed code cannot complete the async
-operations those functions return. The sample speaks PlayFab's documented HTTPS JSON API
-instead, which needs no native dependency at all.
-
 ## Testing lessons
 
 ### Test the consumer as well as the data
@@ -331,8 +322,6 @@ Short facts that cost time to establish.
 - PlayFab creates a statistic on first write with last-value-wins aggregation, so an
   unconfigured high-score table ranks the most recent score rather than the best one. It
   cannot be set from code.
-- PlayFab user-data values are capped at 1,000 characters, which is roughly 750 bytes after
-  Base64 encoding.
 
 ## Measured results
 
