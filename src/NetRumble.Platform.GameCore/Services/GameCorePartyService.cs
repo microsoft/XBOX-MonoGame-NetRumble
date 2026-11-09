@@ -1964,6 +1964,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             _entityToPeer.Clear();
             _mutedPeers.Clear();
             _restrictions.Clear();
+            DisposeParty();
             void CompleteDetachedWaits()
             {
                 assignment?.TrySetCanceled();
@@ -1997,7 +1998,6 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 return;
             }
 
-            DisposeParty();
             ResetSessionState();
         }
     }

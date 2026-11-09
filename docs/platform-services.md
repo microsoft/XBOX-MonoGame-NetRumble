@@ -90,7 +90,9 @@ reset and frame pumping share the same gate. A reset detaches its pending waits
 atomically. When reset or disposal reenters from a pump callback, native disposal
 and detached-wait cancellation finish after native state-change enumeration exits,
 not inside it. Cleanup outside a pump completes directly without requiring another
-frame. Session revisions prevent an older leave from tearing down a newer session.
+frame. Every reset retires its old native manager, including a host-closing reset
+that cancels an already pending leave. Session revisions prevent an older leave
+from tearing down a newer session.
 
 The six-second budget is not an end-to-end leave deadline: PlayFab lobby close and
 leave requests retain their separate request timeouts. Run the native-independent

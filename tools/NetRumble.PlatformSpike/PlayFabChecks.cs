@@ -479,11 +479,16 @@ internal static class PlayFabChecks
             first.Task.IsCanceled && second.Task.IsCanceled && !canceledInsidePump && regions.Count == 0);
     }
 
-    private static void PartyReentrantResetChecks(Action<string, bool> check)
+    private static void PartyReentrantResetChecks(Action<string, bool> check, bool nativeManager = false)
     {
         const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
         using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
         var type = typeof(GameCorePartyService);
+        var manager = nativeManager ? PartyManager.Initialize("A1B2C") : null;
+        if (manager is not null)
+        {
+            type.GetField("_party", Flags)!.SetValue(party, manager);
+        }
         var awaitOperation = type.GetMethod("AwaitOperationAsync", Flags)!
             .MakeGenericMethod(typeof(PartyOperationCompleted));
         Task RegisterOperation() => (Task)awaitOperation.Invoke(party,
@@ -495,8 +500,16 @@ internal static class PlayFabChecks
         var regionCompletion = (TaskCompletionSource<IReadOnlyList<PartyRegion>>)regionType
             .GetProperty("Completion")!.GetValue(region)!;
         regions.Add(region);
-        var oldOperation = RegisterOperation();
         var oldRevision = (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!;
+        var oldOperation = (Task)type.GetMethod("TryTeardownAsync", Flags)!.Invoke(party,
+            [new Func<PartyOperationId?>(() => default(PartyOperationId)), oldRevision, CancellationToken.None])!;
+        var managerRetiredBeforeCleanup = false;
+        var oldCleanup = oldOperation.ContinueWith(_ =>
+        {
+            managerRetiredBeforeCleanup = type.GetField("_party", Flags)!.GetValue(party) is null
+                && !(bool)type.GetField("_pumping", Flags)!.GetValue(party)!;
+            type.GetMethod("CleanupSession", Flags)!.Invoke(party, [oldRevision]);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         Task newOperation = Task.CompletedTask;
         var assignment = new TaskCompletionSource<int>();
         type.GetField("_peerAssignment", Flags)!.SetValue(party, assignment);
@@ -508,10 +521,16 @@ internal static class PlayFabChecks
                 pending.Count == 0 && regions.Count == 0);
             check("reentrant reset defers detached cancellations until the pump exits",
                 !oldOperation.IsCompleted && !regionCompletion.Task.IsCompleted);
+            check("every reentrant reset schedules old manager retirement",
+                (bool)type.GetField("_disposeAfterPump", Flags)!.GetValue(party)!
+                && ReferenceEquals(type.GetField("_party", Flags)!.GetValue(party), manager));
             newOperation = RegisterOperation();
         }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         party.Pump();
         reset.GetAwaiter().GetResult();
+        oldCleanup.GetAwaiter().GetResult();
+        check("reset retires the manager before canceled leave cleanup runs",
+            managerRetiredBeforeCleanup);
         check("detached Party waits cancel even when no native manager exists",
             oldOperation.IsCanceled && regionCompletion.Task.IsCanceled);
         check("old reset cancellation preserves a new operation registration",
@@ -607,6 +626,7 @@ internal static class PlayFabChecks
             }
             NativeLobbyResetChecks(Check);
             PartyPumpTeardownChecks(Check, nativeManager: true).GetAwaiter().GetResult();
+            PartyReentrantResetChecks(Check, nativeManager: true);
             return failures == 0 ? 0 : 1;
         }
         catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
