@@ -1,184 +1,106 @@
-using System.Text.Json;
+using GDK.Net.PlayFab;
 using NetRumble.Platform.Offline;
 
 namespace NetRumble.Platform.PlayFab;
 
-/// <summary>
-/// Adds a cloud tier to <see cref="LocalFileGameSaveService"/> using PlayFab user data.
-/// </summary>
-/// <remarks>
-/// <para>
-/// Inherits rather than reimplements, which is what the base class asks for: the local
-/// tier backs settings and match history, both of which are read before sign-in
-/// completes, so it must behave identically whether or not a cloud tier exists.
-/// Everything here is additive.
-/// </para>
-/// <para>
-/// <b>Size limit.</b> <c>/Client/UpdateUserData</c> caps each value at 1,000 characters
-/// by default. Blobs are Base64-encoded, which costs a third on top, so the usable
-/// payload is around 750 bytes - see <see cref="MaxCloudBytes"/>. That is plenty for
-/// settings and a short match history and nowhere near enough for a general save
-/// system, so oversized writes are refused up front with a diagnostic that says why.
-/// Failing at the door beats a 400 from PlayFab that reads as a generic bad request.
-/// </para>
-/// <para>
-/// <b>Not the same thing as GDK Game Save.</b> The contract's cloud tier is satisfied
-/// here by PlayFab, which works on any platform and needs no console. A real Xbox title
-/// would use the GDK's connected storage for certified save data; that path needs the
-/// XGameSave flat API and is not what this implements. The distinction matters if this
-/// ever ships on console, so it is stated rather than left to be discovered.
-/// </para>
-/// </remarks>
+/// <summary>Local files plus PlayFab user data accessed through GDK.Net.</summary>
 internal sealed class PlayFabGameSaveService : LocalFileGameSaveService
 {
-    /// <summary>
-    /// Largest blob that fits PlayFab's 1,000-character value limit once Base64-encoded.
-    /// </summary>
-    /// <remarks>
-    /// Base64 turns n bytes into ceil(n/3)*4 characters. 750 bytes encodes to exactly
-    /// 1,000, so this is the true ceiling rather than a round number chosen for looks.
-    /// </remarks>
     public const int MaxCloudBytes = 750;
+    private readonly Func<PlayFabEntityLease?> _acquireEntity;
+    private readonly CancellationToken _shutdown;
+    private readonly PlayFabConfiguration _configuration;
 
-    private readonly PlayFabRestClient _client;
-    private readonly Func<PlayFabSession?> _session;
-
-    public PlayFabGameSaveService(
-        PlayFabRestClient client,
-        Func<PlayFabSession?> session,
-        string? root = null,
-        Func<string?>? currentUserId = null)
+    internal PlayFabGameSaveService(
+        PlayFabConfiguration configuration, Func<PlayFabEntityLease?> acquireEntity, CancellationToken shutdown = default,
+        string? root = null, Func<string?>? currentUserId = null)
         : base(root, currentUserId)
     {
-        _client = client;
-        _session = session;
+        _acquireEntity = acquireEntity;
+        _shutdown = shutdown;
+        _configuration = configuration;
     }
 
     public override async Task<PlatformResult> SaveCloudAsync(
-        string key,
-        ReadOnlyMemory<byte> data,
-        CancellationToken cancellationToken = default)
+        string key, ReadOnlyMemory<byte> data, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(key))
+        if (string.IsNullOrWhiteSpace(key) || data.Length > MaxCloudBytes)
         {
-            return PlatformResult.Fail(
-                PlatformStatus.Failed,
-                "Could not save your data.",
-                "SaveCloudAsync called with an empty key.");
+            return PlatformResult.Fail(PlatformStatus.Failed, "Could not save your data.",
+                $"Invalid user-data key or payload exceeds {MaxCloudBytes} bytes.");
         }
-
-        if (data.Length > MaxCloudBytes)
+        if (_configuration.IsPlaceholder)
         {
-            return PlatformResult.Fail(
-                PlatformStatus.Failed,
-                "That save is too large to store online.",
-                $"SaveCloudAsync got {data.Length} bytes for '{key}'; PlayFab user data " +
-                $"allows {MaxCloudBytes} bytes once Base64-encoded.");
+            return PlatformResult.Unavailable(_configuration.UnavailableReason);
         }
-
-        var result = await _client.PostAsync(
-            "/Client/UpdateUserData",
-            new UpdateUserDataRequest
+        try
+        {
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown);
+            lifetime.Token.ThrowIfCancellationRequested();
+            using var lease = _acquireEntity();
+            if (lease is null)
             {
-                // PlayFab user data values are strings, so arbitrary bytes have to be
-                // encoded. Base64 rather than UTF-8: save blobs are not text, and any
-                // byte sequence that is not valid UTF-8 would be silently mangled.
-                Data = new Dictionary<string, string> { [key] = Convert.ToBase64String(data.Span) },
-            },
-            PlayFabJsonContext.Default.UpdateUserDataRequest,
-            PlayFabAuth.SessionTicket,
-            _session(),
-            cancellationToken).ConfigureAwait(false);
-
-        return result.Succeeded
-            ? PlatformResult.Ok()
-            : PlatformResult.Fail(
-                result.Status,
-                "Could not save your data online.",
-                result.Result.Diagnostics);
+                return PlatformResult.Fail(PlatformStatus.NotSignedIn, "Sign in before saving online.");
+            }
+            await PlayerDataManagement.ClientUpdateUserDataAsync(lease.Entity,
+                new PlayerDataManagementClientUpdateUserDataRequest
+                {
+                    Data = new Dictionary<string, string> { [key] = Convert.ToBase64String(data.Span) },
+                }, lifetime.Token).ConfigureAwait(false);
+            return PlatformResult.Ok();
+        }
+        catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
+        {
+            return PlayFabFailure.FromException(ex, "Could not save your data online.");
+        }
     }
 
     public override async Task<PlatformResult<byte[]>> LoadCloudAsync(
-        string key,
-        CancellationToken cancellationToken = default)
+        string key, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            return PlatformResult<byte[]>.Fail(
-                PlatformStatus.Failed,
-                "Could not read your saved data.",
-                "LoadCloudAsync called with an empty key.");
+            return PlatformResult<byte[]>.Fail(PlatformStatus.Failed, "Could not read your saved data.",
+                "The user-data key was empty.");
         }
-
-        var result = await _client.PostAsync(
-            "/Client/GetUserData",
-            new GetUserDataRequest { Keys = [key] },
-            PlayFabJsonContext.Default.GetUserDataRequest,
-            PlayFabAuth.SessionTicket,
-            _session(),
-            cancellationToken).ConfigureAwait(false);
-
-        if (result.Failed)
+        if (_configuration.IsPlaceholder)
         {
-            return PlatformResult<byte[]>.Fail(
-                result.Status,
-                "Could not read your saved data.",
-                result.Result.Diagnostics);
+            return PlatformResult<byte[]>.Unavailable(_configuration.UnavailableReason);
         }
-
-        return ReadUserDataValue(result.Value, key);
-    }
-
-    /// <summary>
-    /// Pulls one key's bytes out of a <c>GetUserData</c> response.
-    /// </summary>
-    /// <remarks>
-    /// Internal so the spike can prove the nesting (<c>Data.key.Value</c>, not
-    /// <c>Data.key</c>), the absent-key case, and - importantly - that a corrupt
-    /// Base64 value is reported rather than thrown, since <c>Convert.FromBase64String</c>
-    /// throws on malformed input and this runs while loading a player's settings.
-    /// </remarks>
-    internal static PlatformResult<byte[]> ReadUserDataValue(JsonElement data, string key)
-    {
-        if (!data.TryGetProperty("Data", out var bag)
-            || bag.ValueKind != JsonValueKind.Object
-            || !bag.TryGetProperty(key, out var record)
-            || record.ValueKind != JsonValueKind.Object)
-        {
-            // Absent is not an error, exactly as in the local tier: a player who has
-            // never saved has no record, and first run must not look like a failure.
-            return PlatformResult<byte[]>.Ok(Array.Empty<byte>());
-        }
-
-        var encoded = PlayFabRestClient.ReadString(record, "Value");
-        if (encoded.Length == 0)
-        {
-            return PlatformResult<byte[]>.Ok(Array.Empty<byte>());
-        }
-
         try
         {
-            return PlatformResult<byte[]>.Ok(Convert.FromBase64String(encoded));
+            using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown);
+            lifetime.Token.ThrowIfCancellationRequested();
+            using var lease = _acquireEntity();
+            if (lease is null)
+            {
+                return PlatformResult<byte[]>.Fail(PlatformStatus.NotSignedIn, "Sign in before loading online.");
+            }
+            var result = await PlayerDataManagement.ClientGetUserDataAsync(lease.Entity,
+                new PlayerDataManagementGetUserDataRequest { Keys = [key] }, lifetime.Token).ConfigureAwait(false);
+            return ReadUserDataValue(result.Data, key);
+        }
+        catch (Exception ex) when (PlayFabFailure.IsExpected(ex))
+        {
+            return PlayFabFailure.For<byte[]>(PlayFabFailure.FromException(ex, "Could not read your saved data."));
+        }
+    }
+
+    internal static PlatformResult<byte[]> ReadUserDataValue(
+        IReadOnlyDictionary<string, UserDataRecord>? data, string key)
+    {
+        if (data is null || !data.TryGetValue(key, out var record) || string.IsNullOrEmpty(record.Value))
+        {
+            return PlatformResult<byte[]>.Ok([]);
+        }
+        try
+        {
+            return PlatformResult<byte[]>.Ok(Convert.FromBase64String(record.Value));
         }
         catch (FormatException ex)
         {
-            // Someone wrote this key by another route - Game Manager, a CloudScript
-            // handler, an older build - and it is not our encoding. Say so plainly;
-            // treating it as empty would silently discard the player's real data.
-            return PlatformResult<byte[]>.Fail(
-                PlatformStatus.Failed,
-                "Your saved data could not be read.",
+            return PlatformResult<byte[]>.Fail(PlatformStatus.Failed, "Your saved data could not be read.",
                 $"User data key '{key}' is not Base64: {ex.Message}");
         }
-    }
-
-    internal sealed class UpdateUserDataRequest
-    {
-        public required IReadOnlyDictionary<string, string> Data { get; init; }
-    }
-
-    internal sealed class GetUserDataRequest
-    {
-        public required IReadOnlyList<string> Keys { get; init; }
     }
 }

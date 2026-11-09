@@ -113,10 +113,10 @@ reflective has been added. Expand the aggregate warning with
 `/p:GdkxIlcFlags=--nosinglewarnassembly:<AssemblyName>` and fix the call site rather than
 rooting the assembly.
 
-The pattern that makes this work is worth copying. `PlayFabRestClient.PostAsync` takes a
-`JsonTypeInfo<T>` explicitly instead of looking the body's type up at runtime, so a request
-type nobody registered in the source-generated `PlayFabJsonContext` fails to compile
-instead of failing on XBOX Series X|S. Do the same for any new endpoint.
+PlayFab calls use GDK.Net's typed native wrappers rather than reflection-based JSON
+serialization. Keep new service calls on those wrappers; request marshalling and native
+result ownership belong to GDK.Net. The console layout includes `PlayFabServices.dll`
+and `PlayFabMultiplayer.dll` alongside Core and Party.
 
 ## Debugging
 

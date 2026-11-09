@@ -131,6 +131,8 @@ internal sealed class GameCoreRuntime : IPlatformRuntime
     /// </summary>
     internal GameCorePartyService? Party { get; set; }
 
+    internal GameCoreOnlineSession? Online { get; set; }
+
     public Task<PlatformResult> InitializeAsync(CancellationToken cancellationToken = default)
     {
         if (IsInitialized)
@@ -312,6 +314,7 @@ internal sealed class GameCoreRuntime : IPlatformRuntime
         try
         {
             Dispatcher.Drain();
+            Online?.Pump();
             Activity?.Pump();
             Party?.Pump();
         }
