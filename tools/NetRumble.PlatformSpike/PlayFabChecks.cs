@@ -76,8 +76,24 @@ internal static class PlayFabChecks
             Map(unchecked((int)0x80072EFD)).Status == PlatformStatus.NetworkFailure);
         Check("expired native sign-in maps to NotSignedIn",
             Map(PlayFabErrors.Noentitytoken).Status == PlatformStatus.NotSignedIn);
-        Check("closed lobbies report a player-facing refusal",
-            Map(PlayFabErrors.LobbyNotJoinable).Failed && Map(PlayFabErrors.LobbyNotJoinable).Message!.Contains("match"));
+        foreach (var error in new[] { PlayFabErrors.LobbyNotJoinable, PlayFabErrors.LobbyDoesNotExist })
+        {
+            var exception = new PlayFabException(error);
+            var refusal = PlayFabFailure.FromException(exception, "The request failed.");
+            Check($"{error:X8}: unavailable lobbies map to SessionNotJoinable",
+                refusal.Failed && refusal.Status == PlatformStatus.SessionNotJoinable);
+            Check($"{error:X8}: unavailable lobbies retain the player-facing refusal",
+                refusal.Message == "This match is full or no longer accepts players.");
+            Check($"{error:X8}: unavailable lobbies retain native diagnostics",
+                refusal.Diagnostics == exception.Message);
+            var typedRefusal = PlayFabFailure.For<PlayFabLobby>(refusal);
+            Check($"{error:X8}: typed lobby results preserve the refusal",
+                typedRefusal.Status == PlatformStatus.SessionNotJoinable
+                && typedRefusal.Message == refusal.Message
+                && typedRefusal.Result.Diagnostics == refusal.Diagnostics);
+        }
+        Check("unknown errors remain generic failures",
+            Map(unchecked((int)0x81234567)).Status == PlatformStatus.Failed);
         Check("unknown errors keep native diagnostics",
             Map(unchecked((int)0x81234567)).Diagnostics?.Contains("81234567") == true);
         Check("native-library absence is explicit",

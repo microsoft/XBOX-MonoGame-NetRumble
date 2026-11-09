@@ -994,6 +994,7 @@ public sealed class LobbyScreen : Screen
         {
             PlatformStatus.NetworkFailure => "The connection was lost. Check your network and try again.",
             PlatformStatus.TimedOut => "The match did not respond in time.",
+            PlatformStatus.SessionNotJoinable => "This match is full or no longer accepts players.",
             PlatformStatus.NotSignedIn => "Online play needs you to be signed in to Xbox.",
             PlatformStatus.NoPrivilege => "This account is not allowed to play online multiplayer.",
             PlatformStatus.Unavailable => "Online play is unavailable right now.",
