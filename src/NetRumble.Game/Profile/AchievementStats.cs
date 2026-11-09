@@ -7,7 +7,7 @@ namespace NetRumble.Game.Profile;
 
 /// <summary>
 /// The cumulative progress behind the five progressive achievements, persisted through
-/// <see cref="IGameSaveService"/>: local tier always, PlayFab cloud tier once signed in.
+/// <see cref="IGameSaveService"/>: local tier always, platform cloud tier once signed in.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -313,6 +313,7 @@ public sealed class AchievementStats
     public async Task SyncCloudAsync(IGameSaveService saves, CancellationToken cancellationToken = default)
     {
         var result = await saves.LoadCloudAsync(SaveKey, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (result.Failed)
         {
@@ -321,13 +322,16 @@ public sealed class AchievementStats
             return;
         }
 
-        if (result.Value is { Length: > 0 } bytes && TryParse(bytes) is { } cloud)
+        if (result.Value is { Length: > 0 } bytes)
         {
+            if (TryParse(bytes) is not { } cloud)
+            {
+                NetRumble.Platform.Diagnostics.CrashLog.Mark("gamesave: the cloud achievement record is malformed.");
+                return;
+            }
             MergeFrom(cloud);
         }
 
-        // Unconditional: even when the cloud had nothing to add, this is the write that
-        // seeds a brand new account from whatever was earned offline.
         await SaveAsync(saves, cancellationToken);
     }
 
@@ -338,7 +342,7 @@ public sealed class AchievementStats
         IsDirty = false;
 
         await saves.SaveLocalAsync(SaveKey, bytes, cancellationToken);
-        await saves.SaveCloudAsync(SaveKey, bytes, cancellationToken);
+        await saves.SaveCloudAsync(SaveKey, Serialise(), cancellationToken);
     }
 
     /// <summary>

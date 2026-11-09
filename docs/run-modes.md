@@ -3,6 +3,11 @@
 NetRumble picks a platform provider at startup and can be forced onto a specific one from
 the command line. Every mode below runs from the same build.
 
+In the lobby, click the ship and color tabs to customize; keyboard navigation does
+not change those tabs. Controller navigation is unchanged. The original hotkeys
+remain: **Space** toggles Ready, **T** toggles voice mute, and **Esc** opens the leave
+confirmation. There are no additional Ready, mute or leave buttons.
+
 ## Default
 
 ```powershell
@@ -47,8 +52,14 @@ dotnet run --project src\NetRumble.Game -- --playfab-title=<id>
 ```
 
 The `NETRUMBLE_PLAYFAB_TITLE_ID` environment variable does the same thing. This composes
-with any provider mode, so `--platform=lan --playfab-title=<id>` gives you a real
-transport alongside real cloud save against a title you control.
+with any provider mode. Adding PlayFab to offline or LAN now requires the Gaming Runtime
+and native PlayFab redistributables, just like GameCore. In Debug builds, supply
+`--pf-user=<developer-id>` for custom-ID sign-in against a title you control; this
+authentication path is disabled in Release. LAN without PlayFab still needs no GDK.
+
+Xbox sign-in, user-data calls and Lobby operations all use GDK.Net's native wrappers.
+There is no REST fallback. The selected provider must be initialized and pumped every
+frame, including while lobby operations are outstanding.
 
 ## Unattended playthrough
 
@@ -73,6 +84,12 @@ dotnet run --project tools\NetRumble.PlatformSpike -- --platform=gamecore
 initializes a provider, signs in while pumping, round-trips a save, exercises the netcode
 and measures pump cost. It is the regression gate for any change to the platform boundary
 or the multiplayer core. See [Contributing](../CONTRIBUTING.md).
+
+Run just the native-independent PlayFab adapter checks with
+`--playfab-checks-only`. These cover save compatibility, size limits, join-code metadata,
+error mapping and unavailable/canceled paths; they do not prove live service behavior.
+`--playfab-native-smoke` checks native runtime, Core/Services and Lobby startup,
+one empty state-change pump and teardown without authenticating or writing service data.
 
 `--platform=offline` reports three failures on a machine that has the GDK installed. That
 is a property of the harness rather than of the game. See

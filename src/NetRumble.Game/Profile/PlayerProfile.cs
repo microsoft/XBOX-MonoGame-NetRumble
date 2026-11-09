@@ -222,7 +222,16 @@ public sealed class PlayerProfile
             // First time this account has signed in here. Seed its file from whatever is
             // in memory now - the built-in defaults, or settings the player changed on the
             // way in - rather than leaving it absent until they next change something.
-            Save();
+            var wasSuppressed = SuppressCloudPush;
+            SuppressCloudPush = true;
+            try
+            {
+                Save();
+            }
+            finally
+            {
+                SuppressCloudPush = wasSuppressed;
+            }
         }
     }
 

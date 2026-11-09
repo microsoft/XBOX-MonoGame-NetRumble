@@ -17,6 +17,12 @@ so it is a hard prerequisite for **every** build rather than only the XBOX Serie
 Set the `GdkNetRoot` MSBuild property if your checkout lives somewhere other than beside
 this repository.
 
+All PlayFab calls use GDK.Net's native wrappers. PlayFab-enabled offline/LAN developer
+runs also require the Gaming Runtime and the native Core, Services and Multiplayer
+libraries. An ordinary offline or LAN run without PlayFab still works without the GDK.
+The desktop build stages available native libraries from `GameDKCoreLatest`; console
+packaging stages the Xbox copies instead.
+
 The `gdk-dotnet` repository that holds XBOX GDK.NET is not public at the time of writing.
 Request access through the
 [XBOX Developer Program](https://developer.microsoft.com/en-us/games/) or your Microsoft

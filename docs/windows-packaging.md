@@ -24,7 +24,7 @@ Alongside the publish output, the layout carries:
 
 - `packaging\MicrosoftGame.PC.config`, staged as `MicrosoftGame.config`;
 - the store logos from `storelogos\`;
-- the redistributables the title loads at runtime: Party, PlayFab Core and Services,
+- the redistributables the title loads at runtime: Party, PlayFab Core, Services and Multiplayer,
   libHttpClient, XCurl and the XBOX services thunks.
 
 Nothing installs those redistributables machine-wide, and inside a package only what the
