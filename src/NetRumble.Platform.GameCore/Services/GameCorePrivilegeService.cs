@@ -139,13 +139,9 @@ internal sealed class GameCorePrivilegeService : IPrivilegeService
         GamePrivilege privilege,
         CancellationToken cancellationToken = default)
     {
-        var verdict = await CheckAsync(privilege, useCache: true, cancellationToken).ConfigureAwait(false);
-        if (verdict.Allowed || verdict.Reason == PrivilegeDenialReason.Restricted)
+        var verdict = await CheckAsync(privilege, useCache: false, cancellationToken).ConfigureAwait(false);
+        if (verdict.Allowed)
         {
-            // Restricted (parental control / suspension) is not offered the resolution
-            // flow: the Godot source only offers it when the raw deny reason is not
-            // "banned", and this class folds "banned" into Restricted below - see
-            // ToDenialReason. There is nothing the system UI can fix for either.
             return verdict;
         }
 
@@ -228,12 +224,6 @@ internal sealed class GameCorePrivilegeService : IPrivilegeService
         _ => throw new ArgumentOutOfRangeException(nameof(privilege), privilege, "Not a GDK-checkable privilege."),
     };
 
-    /// <summary>
-    /// <c>Banned</c> folds into <see cref="PrivilegeDenialReason.Restricted"/>: neither is
-    /// resolvable through the system UI, and <see cref="PrivilegeDenialReason"/> has no
-    /// separate value for it. The player-facing text in <see cref="Describe"/> still
-    /// distinguishes the two.
-    /// </summary>
     private static PrivilegeDenialReason ToDenialReason(UserPrivilegeDenyReason reason) => reason switch
     {
         UserPrivilegeDenyReason.PurchaseRequired => PrivilegeDenialReason.PurchaseRequired,
