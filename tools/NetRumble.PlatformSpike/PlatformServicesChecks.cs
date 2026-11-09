@@ -180,16 +180,15 @@ internal static class PlatformServicesChecks
         Console.WriteLine($"    ---- RequiresVirtualKeyboard={ui.RequiresVirtualKeyboard}");
         Check("RequiresVirtualKeyboard reads without throwing", true);
 
-        // ShowTextEntryAsync and ShowAccountPickerAsync both surface real, modal GDK
-        // UI (XGameUiShowTextEntryAsync / XUserAddAsync) that only ever completes when
+        // ShowTextEntryAsync surfaces real, modal GDK UI that only completes when
         // a person interacts with it or a console shell dismisses it - and completion
         // is only delivered through Pump(), which nothing is driving outside the main
-        // Program loop's PumpUntil helper. Calling either here, unattended, could hang
+        // Program loop's PumpUntil helper. Calling it here, unattended, could hang
         // the harness rather than fail it, which is worse than not testing it at all.
         // Marked SKIP rather than exercised - see docs/design-notes.md for what a real
         // verification of this would need (an attended run with a signed-in profile).
         Console.WriteLine(
-            "    SKIP ShowTextEntryAsync/ShowAccountPickerAsync need an attended session " +
+            "    SKIP ShowTextEntryAsync needs an attended session " +
             "to drive the modal GDK UI to completion; not exercised here to avoid hanging " +
             "an unattended run. See docs/design-notes.md.");
 

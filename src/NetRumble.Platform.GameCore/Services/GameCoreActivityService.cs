@@ -71,9 +71,7 @@ internal sealed class GameCoreActivityService : IActivityService
     private readonly GameCoreXblContext _xbl;
 
     private readonly ConcurrentQueue<string> _pendingInvites = new();
-    private readonly object _accountStateLock = new();
     private readonly HashSet<ulong> _reportedPlayers = new();
-    private string? _lastAccountId;
     private GameActivationManager? _activation;
     private bool _registered;
     private bool _activityPublished;
@@ -87,44 +85,9 @@ internal sealed class GameCoreActivityService : IActivityService
         _runtime = runtime;
         _identity = identity;
         _xbl = xbl;
-        _lastAccountId = identity.CurrentUser?.LocalId;
-        _identity.UserChanged += OnUserChanged;
     }
 
     public event Action<string>? InviteAccepted;
-
-    private bool AddReportedPlayer(ulong playerId)
-    {
-        lock (_accountStateLock)
-        {
-            return _reportedPlayers.Add(playerId);
-        }
-    }
-
-    private void RemoveReportedPlayer(ulong playerId)
-    {
-        lock (_accountStateLock)
-        {
-            _reportedPlayers.Remove(playerId);
-        }
-    }
-
-    private void OnUserChanged(PlatformUser? user)
-    {
-        var accountId = user?.LocalId;
-        lock (_accountStateLock)
-        {
-            if (_lastAccountId == accountId)
-            {
-                return;
-            }
-
-            _lastAccountId = accountId;
-            _reportedPlayers.Clear();
-            _activityPublished = false;
-            _groupId = null;
-        }
-    }
 
     /// <summary>
     /// Drains activation callbacks queued since the last call. Must run from
@@ -399,13 +362,9 @@ internal sealed class GameCoreActivityService : IActivityService
         // activities as the same game. The caller rarely has anything meaningful to put
         // here, so one is minted per published activity and held until the activity is
         // deleted.
-        string activityGroupId;
-        lock (_accountStateLock)
-        {
-            activityGroupId = _groupId = string.IsNullOrWhiteSpace(groupId)
-                ? _groupId ?? Guid.NewGuid().ToString("N")
-                : groupId;
-        }
+        _groupId = string.IsNullOrWhiteSpace(groupId)
+            ? _groupId ?? Guid.NewGuid().ToString("N")
+            : groupId;
 
         try
         {
@@ -415,7 +374,7 @@ internal sealed class GameCoreActivityService : IActivityService
                 MultiplayerActivityJoinRestriction.Public,
                 ToPlayerCount(maxPlayers),
                 ToPlayerCount(currentPlayers),
-                activityGroupId,
+                _groupId,
                 MultiplayerActivityPlatform.Unknown);
 
             await _runtime.Dispatcher
@@ -636,7 +595,7 @@ internal sealed class GameCoreActivityService : IActivityService
         {
             if (ulong.TryParse(text, out var id)
                 && id != context.XboxUserId
-                && AddReportedPlayer(id))
+                && _reportedPlayers.Add(id))
             {
                 // Opponent rather than Teammate: this is a free-for-all deathmatch, and
                 // the guidance is to report the least specific type that fits.
@@ -664,7 +623,7 @@ internal sealed class GameCoreActivityService : IActivityService
             // later retry of the same players.
             foreach (var update in updates)
             {
-                RemoveReportedPlayer(update.XboxUserId);
+                _reportedPlayers.Remove(update.XboxUserId);
             }
 
             return Task.FromResult(PlatformResult.Fail(
@@ -767,8 +726,6 @@ internal sealed class GameCoreActivityService : IActivityService
     /// <summary>Unsubscribes from activation events. Safe to call more than once.</summary>
     internal void Shutdown()
     {
-        _identity.UserChanged -= OnUserChanged;
-
         if (_activation is null)
         {
             return;

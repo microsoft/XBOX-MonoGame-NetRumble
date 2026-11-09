@@ -1,12 +1,10 @@
 using GDK.Net;
 using GDK.Net.GameUI;
-using GDK.Net.Users;
 
 namespace NetRumble.Platform.GameCore.Services;
 
 /// <summary>
-/// GDK platform UI: the system on-screen keyboard for text entry, and the account
-/// picker.
+/// GDK platform UI: the system on-screen keyboard for text entry.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -16,10 +14,7 @@ namespace NetRumble.Platform.GameCore.Services;
 /// two-call result-size pattern and the UTF-8 buffer.
 /// </para>
 /// <para>
-/// <b>Account picker has no dedicated GDK entry point.</b>
-/// </para>
-/// <para>
-/// <b>Unverifiable in this environment.</b> Both surfaces need an interactive session
+/// <b>Unverifiable in this environment.</b> Text entry needs an interactive session
 /// with the GDK's system UI actually able to draw, which a desktop dev machine without
 /// a foreground game window in the right state may not provide even with the runtime
 /// initialized. This class was verified to build and its GDK.Net calls to resolve; the
@@ -29,12 +24,9 @@ namespace NetRumble.Platform.GameCore.Services;
 internal sealed class GameCorePlatformUiService : IPlatformUiService
 {
     private readonly GameCoreRuntime _runtime;
-    private readonly GameCoreIdentityService _identity;
-
-    internal GameCorePlatformUiService(GameCoreRuntime runtime, GameCoreIdentityService identity)
+    internal GameCorePlatformUiService(GameCoreRuntime runtime)
     {
         _runtime = runtime;
-        _identity = identity;
     }
 
     /// <summary>
@@ -84,59 +76,6 @@ internal sealed class GameCorePlatformUiService : IPlatformUiService
         {
             return PlatformResult<string>.Canceled();
         }
-    }
-
-    public async Task<PlatformResult> ShowAccountPickerAsync(CancellationToken cancellationToken = default)
-    {
-        if (!_runtime.IsInitialized || _runtime.Runtime is null)
-        {
-            return PlatformResult.Unavailable("The account picker is not available in this build.");
-        }
-
-        User user;
-        try
-        {
-            user = await _runtime.Dispatcher
-                .Marshal(_runtime.Runtime.Users.AddAsync(
-                    UserAddOptions.None,
-                    cancellationToken))
-                .ConfigureAwait(false);
-        }
-        catch (GameRuntimeException ex)
-        {
-            // Dismissing the picker also lands here (XUserAddAsync fails the same way
-            // a cancelled sign-in does) - a normal outcome, not an error.
-            return PlatformResult.Canceled(ex.Message);
-        }
-        catch (OperationCanceledException)
-        {
-            return PlatformResult.Canceled();
-        }
-
-        string selectedAccountId;
-        try
-        {
-            selectedAccountId = user.Id.ToString();
-        }
-        catch (GameRuntimeException ex)
-        {
-            user.Dispose();
-            return PlatformResult.Fail(
-                PlatformStatus.Failed,
-                "The selected account could not be read.",
-                ex.GetType().Name);
-        }
-
-        if (string.Equals(_identity.CurrentUser?.LocalId, selectedAccountId, StringComparison.Ordinal))
-        {
-            user.Dispose();
-            return PlatformResult.Ok();
-        }
-
-        var adopted = _identity.Adopt(user);
-        return adopted.Succeeded
-            ? PlatformResult.Ok()
-            : PlatformResult.Fail(PlatformStatus.Failed, adopted.Message ?? "The account could not be switched.");
     }
 
     /// <summary>Maps this title's <see cref="TextEntryScope"/> onto

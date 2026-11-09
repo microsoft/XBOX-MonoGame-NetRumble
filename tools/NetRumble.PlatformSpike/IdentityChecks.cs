@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 using NetRumble.Platform;
 using NetRumble.Platform.Composition;
 
@@ -27,6 +28,8 @@ namespace NetRumble.PlatformSpike;
 /// </remarks>
 internal static class IdentityChecks
 {
+    private static int _failures;
+
     /// <summary>
     /// Finds a sign-in that passes the shared options struct directly instead of the
     /// context helper that carries the override.
@@ -35,14 +38,17 @@ internal static class IdentityChecks
         @"SignInAsync\(\s*SignInOptions\.",
         RegexOptions.Compiled);
 
-    public static async Task Run()
+    public static async Task<int> Run()
     {
+        _failures = 0;
         Console.WriteLine("[17] Developer identity override");
 
         await OverrideReachesTheProvider().ConfigureAwait(false);
         CallSitesForwardTheOverride();
+        SimplifiedUserModel();
 
         Console.WriteLine();
+        return _failures == 0 ? 0 : 1;
     }
 
     /// <summary>
@@ -170,6 +176,52 @@ internal static class IdentityChecks
         return null;
     }
 
+    private static void SimplifiedUserModel()
+    {
+        Console.WriteLine("    ---- Simplified user model");
+        var root = FindRepoRoot();
+        Check("found repository for user-model contract checks", root is not null);
+        if (root is null)
+        {
+            return;
+        }
+
+        string[] manifests =
+        [
+            "MicrosoftGame.config",
+            "MicrosoftGame.PC.config",
+            "MicrosoftGame.GDKX.Scarlett.config",
+            "MicrosoftGame.GDKX.XboxOne.config",
+        ];
+        foreach (var manifest in manifests)
+        {
+            var game = XDocument.Load(Path.Combine(root, "packaging", manifest)).Root!;
+            Check($"{manifest} selects the simplified user model",
+                (string?)game.Element("AdvancedUserModel") == "false");
+            Check($"{manifest} retains package version 1.0.3.0",
+                (string?)game.Element("Identity")?.Attribute("Version") == "1.0.3.0");
+        }
+
+        Check("platform UI exposes no account-switch picker",
+            typeof(IPlatformUiService).GetMethod("ShowAccountPickerAsync") is null);
+
+        var services = Path.Combine(root, "src", "NetRumble.Platform.GameCore", "Services");
+        var identity = File.ReadAllText(Path.Combine(services, "GameCoreIdentityService.cs"));
+        var options = Regex.Matches(identity, @"UserAddOptions\.(\w+)");
+        Check("GDK identity only requests the default user silently, with no UI fallback",
+            options.Count == 1 && options[0].Groups[1].Value == "AddDefaultUserSilently");
+
+        var activity = File.ReadAllText(Path.Combine(services, "GameCoreActivityService.cs"));
+        Check("activity state does not subscribe to account replacement",
+            !activity.Contains("_identity.UserChanged +=", StringComparison.Ordinal));
+    }
+
     private static void Check(string label, bool condition)
-        => Console.WriteLine($"    {(condition ? "PASS" : "FAIL")} {label}");
+    {
+        Console.WriteLine($"    {(condition ? "PASS" : "FAIL")} {label}");
+        if (!condition)
+        {
+            _failures++;
+        }
+    }
 }

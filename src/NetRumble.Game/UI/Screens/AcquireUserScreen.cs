@@ -15,11 +15,10 @@ namespace NetRumble.Game.UI.Screens;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Why this is its own screen and not a spinner over the main menu: the platform's
-/// account picker needs the game foregrounded and an answer from the player, and
-/// running that underneath a live menu meant the picker fought the menu for input while
-/// a failure showed as nothing more than a quiet "Not signed in" label. Here sign-in
-/// owns the screen and every outcome is an explicit choice.
+/// Sign-in owns this screen so profile acquisition and the online-service exchange
+/// finish before the main menu becomes interactive. The simplified user model supplies
+/// the default Xbox user without an account picker; failures still need a visible retry
+/// or offline choice rather than a quiet "Not signed in" label.
 /// </para>
 /// <para>
 /// <b>Boot vs sign-in are two different waits.</b> <see cref="NetRumbleGame.PlatformSettled"/>
