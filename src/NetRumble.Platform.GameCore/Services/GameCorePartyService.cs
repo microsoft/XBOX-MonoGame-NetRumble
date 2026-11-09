@@ -843,9 +843,23 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             var trimmed = message.Length > MaxChatChars ? message[..MaxChatChars] : message;
             try
             {
+                var targets = _party!.ChatControls
+                    .Where(control => !control.IsLocal)
+                    .Where(control =>
+                    {
+                        var peerId = PeerIdForChat(control);
+                        return peerId is not null && !IsPeerMuted(peerId.Value)
+                            && _restrictions.TryGetValue(peerId.Value, out var restriction) && restriction.AllowText;
+                    })
+                    .ToArray();
+                if (targets.Length == 0)
+                {
+                    return PlatformResult.Fail(PlatformStatus.Failed, "That chat message could not be sent.");
+                }
+
                 var data = new byte[4];
                 BinaryPrimitives.WriteInt32LittleEndian(data, LocalPeerId);
-                _localChat.SendText(Array.Empty<PartyChatControl>(), trimmed, data);
+                _localChat.SendText(targets, trimmed, data);
                 ChatTextReceived?.Invoke(LocalPeerId, trimmed, ChatTextKind.Typed);
                 return PlatformResult.Ok();
             }
@@ -1877,12 +1891,6 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
     /// dropped message is simply a message the player never sees, which is the correct
     /// outcome for text that could not be shown to be acceptable.
     /// </para>
-    /// <para>
-    /// The event is raised from the verification continuation. That is the same thread
-    /// affinity every other Party event on this class has, because
-    /// <see cref="GameCoreModerationService.VerifyTextAsync"/> marshals its own
-    /// completion through <see cref="PumpDispatcher"/>.
-    /// </para>
     /// </remarks>
     private void RaiseVerifiedChatText(int peerId, string chatText, ChatTextKind kind)
     {
@@ -1900,19 +1908,22 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         {
             var verified = await _moderation!.VerifyTextAsync(chatText).ConfigureAwait(false);
 
-            lock (_stateGate)
+            // Re-checked after the round trip: the peer can have been muted, restricted
+            // or disconnected, or chat revoked entirely, while it was in flight.
+            _runtime!.Dispatcher.Post(() =>
             {
-                // Re-checked after the round trip: the peer can have been muted, restricted
-                // or disconnected, or chat revoked entirely, while it was in flight.
-                if (verified.Failed || verified.Value is null || _disposed || !ChatAllowed
-                    || IsPeerMuted(peerId)
-                    || (_restrictions.TryGetValue(peerId, out var restriction) && !restriction.AllowText))
+                lock (_stateGate)
                 {
-                    return;
-                }
+                    if (verified.Failed || verified.Value is null || _disposed || !ChatAllowed
+                        || IsPeerMuted(peerId)
+                        || (_restrictions.TryGetValue(peerId, out var restriction) && !restriction.AllowText))
+                    {
+                        return;
+                    }
 
-                ChatTextReceived?.Invoke(peerId, verified.Value, kind);
-            }
+                    ChatTextReceived?.Invoke(peerId, verified.Value, kind);
+                }
+            });
         }
         catch (Exception ex) when (IsPlatformException(ex) || ex is OperationCanceledException)
         {
