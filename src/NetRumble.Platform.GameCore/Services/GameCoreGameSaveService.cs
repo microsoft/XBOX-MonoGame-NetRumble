@@ -11,17 +11,14 @@ namespace NetRumble.Platform.GameCore.Services;
 /// Adds roaming saves through GDK.Net's <see cref="GameSaveFiles"/> wrapper.
 /// The platform synchronizes the returned folder; the title uses ordinary file I/O.
 /// </summary>
-internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloudSaveSynchronization, IDisposable
+internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, IDisposable
 {
-    // Keep the old container/key names: XGameSaveFiles maps existing blobs to these paths.
-    private const string ContainerName = "NetRumbleSave";
     public const int MaxCloudBytes = 256 * 1024;
 
     private readonly GameCoreRuntime _runtime;
     private readonly GameCoreIdentityService _identity;
     private readonly object _stateGate = new();
     private readonly SemaphoreSlim _cloudGate = new(1, 1);
-    private readonly SemaphoreSlim _reconcileGate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
     private CancellationTokenSource _sessionCancellation = new();
     private User? _saveUser;
@@ -29,20 +26,13 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
     private long _revision;
     private bool _disposed;
     private bool _suspended;
-    private bool _requiresReconciliation;
-
-    public bool RequiresReconciliation
-    {
-        get { lock (_stateGate) { return _requiresReconciliation; } }
-    }
 
     internal GameCoreGameSaveService(
         GameCoreRuntime runtime,
         GameCoreIdentityService identity,
         string? root,
-        Func<string?> currentUserId,
-        Func<string?>? legacyUserId = null)
-        : base(root, currentUserId, legacyUserId)
+        Func<string?> currentUserId)
+        : base(root, currentUserId)
     {
         _runtime = runtime;
         _identity = identity;
@@ -72,7 +62,7 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
         var bytes = data.ToArray();
         var result = await WithFolderAsync(key, async (folder, token) =>
         {
-            var directory = Path.Combine(folder.Path, ContainerName);
+            var directory = folder.Path;
             var path = Path.Combine(directory, key);
             var temp = Path.Combine(directory, $"nr-{Guid.NewGuid():N}.tmp");
             try
@@ -82,10 +72,6 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
                 lock (_stateGate)
                 {
                     CheckCurrent(folder.User, folder.Revision, token);
-                    if (_requiresReconciliation)
-                    {
-                        throw new OperationCanceledException("Roaming saves are waiting for resume reconciliation.");
-                    }
                     File.Move(temp, path, overwrite: true);
                 }
                 return true;
@@ -101,7 +87,7 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
                     CrashLog.Mark($"gamesave: temporary save cleanup failed: {ex.Message}");
                 }
             }
-        }, cancellationToken, writing: true).ConfigureAwait(false);
+        }, cancellationToken).ConfigureAwait(false);
         return result.Result;
     }
 
@@ -122,7 +108,7 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
         {
             try
             {
-                await using var stream = new FileStream(Path.Combine(folder.Path, ContainerName, key),
+                await using var stream = new FileStream(Path.Combine(folder.Path, key),
                     FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
                 if (stream.Length > MaxCloudBytes)
                 {
@@ -145,7 +131,7 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
 
     private async Task<PlatformResult<T>> WithFolderAsync<T>(
         string key, Func<SaveFolder, CancellationToken, Task<T>> operation,
-        CancellationToken cancellationToken, bool writing = false)
+        CancellationToken cancellationToken)
     {
         using var lifetime = CreateLifetime(cancellationToken);
         var token = lifetime.Token;
@@ -160,10 +146,6 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
                 if (_disposed || _suspended || !_runtime.IsInitialized || !_identity.TryGetUser(out user))
                 {
                     return PlatformResult<T>.Unavailable("Sign in to Xbox to access roaming saves.");
-                }
-                if (writing && _requiresReconciliation)
-                {
-                    return PlatformResult<T>.Unavailable("Roaming saves are waiting for resume reconciliation.");
                 }
                 revision = _revision;
             }
@@ -238,7 +220,7 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
         }
     }
 
-    private void OnUserChanged(PlatformUser? user)
+    private void OnUserChanged(PlatformUser? _)
     {
         lock (_stateGate)
         {
@@ -249,11 +231,6 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
             }
             _saveUser = current;
             InvalidateFolder();
-            _requiresReconciliation = false;
-        }
-        if (user is not null)
-        {
-            _ = InitializeAsync();
         }
     }
 
@@ -264,18 +241,10 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
             lock (_stateGate)
             {
                 _suspended = change == PlatformLifecycleEvent.Suspending;
-                _requiresReconciliation = true;
                 InvalidateFolder();
-            }
-            if (change == PlatformLifecycleEvent.Resumed)
-            {
-                _ = InitializeAsync();
             }
         }
     }
-
-    private Task<PlatformResult<bool>> InitializeAsync()
-        => WithFolderAsync("initialize", (_, _) => Task.FromResult(true), CancellationToken.None);
 
     private void InvalidateFolder()
     {
@@ -286,75 +255,6 @@ internal sealed class GameCoreGameSaveService : LocalFileGameSaveService, ICloud
             _sessionCancellation.Cancel();
             _sessionCancellation.Dispose();
             _sessionCancellation = new CancellationTokenSource();
-        }
-    }
-
-    public Task<PlatformResult> ReconcileAsync(
-        Func<CancellationToken, Task<PlatformResult>> reconcile,
-        CancellationToken cancellationToken = default)
-        => _runtime.Dispatcher.Marshal(ReconcileWorkerAsync(reconcile, cancellationToken));
-
-    private async Task<PlatformResult> ReconcileWorkerAsync(
-        Func<CancellationToken, Task<PlatformResult>> reconcile, CancellationToken cancellationToken)
-    {
-        using var lifetime = CreateLifetime(cancellationToken);
-        var entered = false;
-        try
-        {
-            await _reconcileGate.WaitAsync(lifetime.Token).ConfigureAwait(false);
-            entered = true;
-            lock (_stateGate)
-            {
-                if (!_requiresReconciliation)
-                {
-                    return PlatformResult.Ok();
-                }
-            }
-            var initialized = await WithFolderAsync("reconcile",
-                (folder, _) => Task.FromResult(folder), lifetime.Token).ConfigureAwait(false);
-            if (initialized.Failed || initialized.Value is not { } folder)
-            {
-                return initialized.Result;
-            }
-            var completion = new TaskCompletionSource<PlatformResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var token = lifetime.Token;
-            _runtime.Dispatcher.Post(async () =>
-            {
-                try
-                {
-                    token.ThrowIfCancellationRequested();
-                    completion.TrySetResult(await reconcile(token));
-                }
-                catch (OperationCanceledException)
-                {
-                    completion.TrySetCanceled(token);
-                }
-                catch (Exception ex)
-                {
-                    completion.TrySetException(ex);
-                }
-            });
-            var result = await completion.Task.ConfigureAwait(false);
-            lock (_stateGate)
-            {
-                CheckCurrent(folder.User, folder.Revision, lifetime.Token);
-                if (result.Succeeded)
-                {
-                    _requiresReconciliation = false;
-                }
-            }
-            return result;
-        }
-        catch (OperationCanceledException)
-        {
-            return PlatformResult.Canceled();
-        }
-        finally
-        {
-            if (entered)
-            {
-                _reconcileGate.Release();
-            }
         }
     }
 

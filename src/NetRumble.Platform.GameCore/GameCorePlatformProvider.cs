@@ -44,17 +44,11 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
 
         _xbl = new GameCoreXblContext(_runtime, identity);
 
-        // The cloud tier uses GDK.Net's XGameSaveFiles wrapper (M10). The local tier moves with
-        // it onto the Xbox account, because a save service that no longer talks to
-        // PlayFab must not still need a PlayFab login to decide which folder a file
-        // belongs in; the PlayFab entity id is passed as the legacy key so a player
-        // upgrading from a PlayFab-backed build still reads their existing files.
         _saves = new GameCoreGameSaveService(
             _runtime,
             identity,
             saveRoot,
-            () => identity.CurrentUser?.LocalId,
-            () => _online.EntityId is { Length: > 0 } entityId ? entityId : null);
+            () => identity.CurrentUser?.LocalId);
 
         Privileges = new GameCorePrivilegeService(_runtime, identity);
         Achievements = new GameCoreAchievementService(_runtime, identity, _xbl);

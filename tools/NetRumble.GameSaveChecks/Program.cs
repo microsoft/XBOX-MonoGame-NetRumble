@@ -1,9 +1,6 @@
 using System.Text.Json;
-using System.Reflection;
-using NetRumble.Game;
 using NetRumble.Game.Profile;
 using NetRumble.Platform;
-using NetRumble.Platform.Offline;
 
 var failures = 0;
 void Check(string label, bool passed)
@@ -12,7 +9,7 @@ void Check(string label, bool passed)
     if (!passed) { failures++; }
 }
 
-var root = Path.Combine(Path.GetTempPath(), $"netrumble-reconciliation-{Guid.NewGuid():N}");
+var root = Path.Combine(Path.GetTempPath(), $"netrumble-game-saves-{Guid.NewGuid():N}");
 try
 {
     var saves = new TestSaves();
@@ -38,7 +35,7 @@ try
     var absent = await settings.PullAsync();
     Check("absent settings are a successful no-op", absent.Succeeded && !absent.Value);
     saves.Cloud[CloudSettingsSync.SaveKey] = "invalid json"u8.ToArray();
-    Check("malformed settings fail reconciliation without changing the profile",
+    Check("malformed settings fail without changing the profile",
         (await settings.PullAsync()).Failed && profile.MasterVolume == 0.8f);
     saves.LoadFailure = PlatformResult.Fail(PlatformStatus.NetworkFailure, "test network failure");
     Check("failed settings reads remain explicit failures", (await settings.PullAsync()).Failed);
@@ -55,34 +52,30 @@ try
         saves.OnCloudRead = null;
     }
 
-    await using var platform = new OfflinePlatformProvider(root);
-    var achievements = new AchievementTracker(platform, saves);
-    var original = achievements.Stats;
-    original.Kills = 25;
-    original.WeaponsFired = 1;
+    var original = new AchievementStats { Kills = 25, WeaponsFired = 1 };
     original.SetConfirmedPercent("10", 25);
     saves.Cloud[AchievementStats.SaveKey] = """{"kills":50,"weaponsFired":2}"""u8.ToArray();
-    Check("resume merges downloaded progress without replacing the live stats",
-        (await achievements.ReconcileCloudAsync()).Succeeded
-        && ReferenceEquals(original, achievements.Stats)
-        && original.Kills == 50 && original.WeaponsFired == 3);
-    Check("resume preserves confirmed achievement reports", original.GetConfirmedPercent("10") == 25);
-    await achievements.FlushAsync(force: true);
+    await original.SyncCloudAsync(saves);
+    Check("initial progress loading preserves local progress",
+        original.Kills == 50 && original.WeaponsFired == 3);
+    Check("loading progress preserves confirmed achievement reports", original.GetConfirmedPercent("10") == 25);
     using (var cloud = JsonDocument.Parse(saves.Cloud[AchievementStats.SaveKey]))
     {
-        Check("the merged progress is written back after reconciliation",
+        Check("the loaded progress is persisted",
             cloud.RootElement.GetProperty("kills").GetInt32() == 50
             && cloud.RootElement.GetProperty("weaponsFired").GetInt32() == 3);
     }
     saves.Cloud[AchievementStats.SaveKey] = """{"kills":10}"""u8.ToArray();
-    Check("older cloud progress cannot reduce local progress",
-        (await achievements.ReconcileCloudAsync()).Succeeded && original.Kills == 50);
+    await original.SyncCloudAsync(saves);
+    Check("older cloud progress cannot reduce local progress", original.Kills == 50);
     saves.Cloud[AchievementStats.SaveKey] = "invalid json"u8.ToArray();
-    Check("malformed progress fails reconciliation without resetting local progress",
-        (await achievements.ReconcileCloudAsync()).Failed && original.Kills == 50);
+    var writes = saves.CloudWrites;
+    await original.SyncCloudAsync(saves);
+    Check("malformed progress is not overwritten or used to reset local progress",
+        saves.CloudWrites == writes && original.Kills == 50);
     saves.LoadFailure = PlatformResult.Fail(PlatformStatus.NetworkFailure, "test network failure");
-    Check("failed progress reads remain explicit failures",
-        (await achievements.ReconcileCloudAsync()).Failed && original.Kills == 50);
+    await original.SyncCloudAsync(saves);
+    Check("failed progress reads do not trigger writes", saves.CloudWrites == writes && original.Kills == 50);
     saves.LoadFailure = null;
 
     saves.LocalWriteGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -92,45 +85,9 @@ try
     await pending;
     using (var cloud = JsonDocument.Parse(saves.Cloud[AchievementStats.SaveKey]))
     {
-        Check("a delayed local write cannot push a pre-reconciliation cloud snapshot",
+        Check("a delayed local write cannot push a stale progress snapshot",
             cloud.RootElement.GetProperty("kills").GetInt32() == 100);
     }
-
-    Task RetryAfter(Task active, Func<bool> shouldRetry, Func<Task> retry)
-        => (Task)typeof(LifecycleCoordinator).GetMethod("RetryReconciliationAfterAsync",
-            BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [active, shouldRetry, retry])!;
-    var active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var retries = 0;
-    var needsReconciliation = true;
-    Task Retry()
-    {
-        retries++;
-        needsReconciliation = false;
-        return Task.CompletedTask;
-    }
-    var queued = RetryAfter(active.Task, () => needsReconciliation, Retry);
-    var duplicate = RetryAfter(queued, () => needsReconciliation, Retry);
-    Check("connectivity recovery waits behind active reconciliation", retries == 0 && !queued.IsCompleted);
-    active.SetResult();
-    await duplicate;
-    Check("connectivity recovery is retained and deduplicated after the active attempt", retries == 1);
-
-    active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var online = true;
-    queued = RetryAfter(active.Task, () => online, Retry);
-    online = false;
-    active.SetResult();
-    await queued;
-    Check("queued retries recheck connectivity before starting", retries == 1);
-
-    active = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-    var generation = 1;
-    var capturedGeneration = generation;
-    queued = RetryAfter(active.Task, () => generation == capturedGeneration, Retry);
-    generation++;
-    active.SetResult();
-    await queued;
-    Check("a newer resume supersedes retries queued for the previous session", retries == 1);
 }
 finally
 {

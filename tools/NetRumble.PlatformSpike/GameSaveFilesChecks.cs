@@ -4,6 +4,7 @@ using GDK.Net.Users;
 using NetRumble.Platform;
 using NetRumble.Platform.GameCore;
 using NetRumble.Platform.GameCore.Services;
+using NetRumble.Platform.Offline;
 
 namespace NetRumble.PlatformSpike;
 
@@ -44,16 +45,38 @@ internal static class GameSaveFilesChecks
             var missing = await Load("settings");
             Check("first run returns an empty successful read", missing.Succeeded && missing.Value!.Length == 0);
             var data = Enumerable.Range(0, 256).Select(i => (byte)i).ToArray();
+            var localRoot = Path.Combine(root, "local");
+            string? localUserId = "account-a";
+            var local = new LocalFileGameSaveService(localRoot, () => localUserId);
+            Check("local saves use the current account directory",
+                (await local.SaveLocalAsync("settings", data)).Succeeded
+                && File.Exists(Path.Combine(localRoot, "users", "account-a", "settings.dat")));
+            localUserId = "account-b";
+            Check("local reads cannot borrow another account's data",
+                (await local.LoadLocalAsync("settings")).Value!.Length == 0);
+            Check("a second account writes its own local save",
+                (await local.SaveLocalAsync("settings", new byte[] { 7 })).Succeeded
+                && (await local.LoadLocalAsync("settings")).Value!.SequenceEqual(new byte[] { 7 }));
+            localUserId = "account-a";
+            Check("switching local accounts preserves the first account's save",
+                (await local.LoadLocalAsync("settings")).Value!.SequenceEqual(data));
+            localUserId = null;
+            Check("unsigned local reads cannot adopt an account's save",
+                (await local.LoadLocalAsync("settings")).Value!.Length == 0);
+            Check("unsigned saves stay in memory without creating files",
+                (await local.SaveLocalAsync("settings", new byte[] { 9 })).Succeeded
+                && (await local.LoadLocalAsync("settings")).Value!.SequenceEqual(new byte[] { 9 })
+                && Directory.GetFiles(localRoot, "*", SearchOption.AllDirectories).Length == 2);
+            localUserId = "account-b";
+            Check("unsigned saves cannot overwrite an account's local save",
+                (await local.LoadLocalAsync("settings")).Value!.SequenceEqual(new byte[] { 7 }));
+
             Check("save writes through the file backend", (await Save("settings", data)).Succeeded);
-            var path = Path.Combine(fixture.Folder, "NetRumbleSave", "settings");
-            Check("container and blob names retain the existing cloud layout",
+            var path = Path.Combine(fixture.Folder, "settings");
+            Check("saves write directly into the SDK-provided directory",
                 File.Exists(path) && File.ReadAllBytes(path).SequenceEqual(data));
             Check("read returns the exact saved bytes",
                 (await Load("settings")).Value!.SequenceEqual(data));
-            var legacy = Path.Combine(fixture.Folder, "NetRumbleSave", "achievement_stats");
-            await File.WriteAllBytesAsync(legacy, data);
-            Check("existing mapped blobs are read without a new extension or format",
-                (await Load("achievement_stats")).Value!.SequenceEqual(data));
 
             var limit = new byte[GameCoreGameSaveService.MaxCloudBytes];
             Check("256 KiB boundary remains writable", (await Save("boundary", limit)).Succeeded);
@@ -62,8 +85,8 @@ internal static class GameSaveFilesChecks
             Check("oversized writes fail explicitly",
                 (await Save("boundary", new byte[limit.Length + 1])).Failed);
             Check("rejected writes preserve the existing file", File.ReadAllBytes(
-                Path.Combine(fixture.Folder, "NetRumbleSave", "boundary")).Length == limit.Length);
-            await File.WriteAllBytesAsync(Path.Combine(fixture.Folder, "NetRumbleSave", "oversized"),
+                Path.Combine(fixture.Folder, "boundary")).Length == limit.Length);
+            await File.WriteAllBytesAsync(Path.Combine(fixture.Folder, "oversized"),
                 new byte[limit.Length + 1]);
             Check("oversized reads fail rather than allocating unbounded save data",
                 (await Load("oversized")).Failed);
@@ -87,7 +110,7 @@ internal static class GameSaveFilesChecks
             }
             Check("65-character keys are supported",
                 (await Save(new string('a', 65), data)).Succeeded);
-            Directory.CreateDirectory(Path.Combine(fixture.Folder, "NetRumbleSave", "blocked"));
+            Directory.CreateDirectory(Path.Combine(fixture.Folder, "blocked"));
             Check("file I/O failures are not reported as missing saves",
                 (await Load("blocked")).Failed);
             Check("failed replacement reports failure",
@@ -98,7 +121,7 @@ internal static class GameSaveFilesChecks
             Check("concurrent writes leave one complete file",
                 concurrent.Length == 4096 && concurrent.All(b => b == concurrent[0]));
             Check("temporary files are cleaned after success and failure",
-                Directory.GetFiles(Path.Combine(fixture.Folder, "NetRumbleSave"), "nr-*.tmp").Length == 0);
+                Directory.GetFiles(fixture.Folder, "nr-*.tmp").Length == 0);
 
             var gate = (SemaphoreSlim)Get(saves, "_cloudGate")!;
             await gate.WaitAsync();
@@ -108,7 +131,7 @@ internal static class GameSaveFilesChecks
             Check("queued writes cannot follow an account switch", (await fixture.Complete(queued)).WasCanceled);
             Check("an account switch leaves both accounts' data untouched",
                 File.ReadAllBytes(path).SequenceEqual(data)
-                && !Directory.Exists(Path.Combine(fixture.Folder, "NetRumbleSave")));
+                && !Directory.Exists(fixture.Folder));
             Check("the new account has an independent save folder",
                 (await Save("settings", new byte[] { 8 })).Succeeded
                 && (await Load("settings")).Value!.SequenceEqual(new byte[] { 8 }));
@@ -117,7 +140,7 @@ internal static class GameSaveFilesChecks
             await gate.WaitAsync();
             gate.Release();
             Check("file writes do not publish completion without a pump",
-                File.Exists(Path.Combine(fixture.Folder, "NetRumbleSave", "pump")) && !pumpWrite.IsCompleted);
+                File.Exists(Path.Combine(fixture.Folder, "pump")) && !pumpWrite.IsCompleted);
             Check("pumping publishes the completed write", (await fixture.Complete(pumpWrite)).Succeeded);
             var pumpRead = saves.LoadCloudAsync("pump");
             await gate.WaitAsync();
@@ -128,7 +151,7 @@ internal static class GameSaveFilesChecks
             await gate.WaitAsync();
             var suspendedWrite = saves.SaveCloudAsync("settings", new byte[] { 99 });
             fixture.Lifecycle(PlatformLifecycleEvent.Suspending);
-            Check("suspension invalidates the synchronized folder", Get(saves, "_folder") is null);
+            Check("suspension invalidates the acquired folder", Get(saves, "_folder") is null);
             Check("new suspended-session writes are refused", (await Save("settings", data)).Failed);
             Check("new suspended-session reads are refused", (await Load("settings")).Failed);
             fixture.Resume();
@@ -136,49 +159,25 @@ internal static class GameSaveFilesChecks
             Check("a pre-suspend queued write cannot commit after resume",
                 (await fixture.Complete(suspendedWrite)).WasCanceled
                 && (await Load("settings")).Value!.SequenceEqual(new byte[] { 8 }));
-            Check("resumed-session writes wait for title reconciliation", (await Save("settings", data)).Failed);
+            Check("resumed-session writes need no title-side synchronization",
+                (await Save("settings", data)).Succeeded);
             var resumeRevision = Get(saves, "_revision");
+            var resumeFolder = Get(saves, "_folder");
             typeof(GameCoreGameSaveService).GetMethod("OnUserChanged", PrivateInstance)!
                 .Invoke(saves, [new PlatformUser { LocalId = "local-account", DisplayName = "Refreshed player" }]);
-            Check("same-account profile refresh cannot release or invalidate the resume barrier",
-                saves.RequiresReconciliation && Equals(resumeRevision, Get(saves, "_revision")));
-            var failedReconcile = await fixture.Complete(saves.ReconcileAsync(
-                _ => Task.FromResult(PlatformResult.Fail(PlatformStatus.NetworkFailure, "test failure"))));
-            Check("failed reconciliation preserves the write barrier",
-                failedReconcile.Failed && (await Save("settings", data)).Failed);
-            var reconciled = false;
-            var callbackStarted = false;
-            var reconciliation = saves.ReconcileAsync(async token =>
-            {
-                callbackStarted = true;
-                var settings = await saves.LoadCloudAsync("settings", token);
-                var stats = await saves.LoadCloudAsync("achievement_stats", token);
-                Check("reconciliation can read synchronized settings and stats",
-                    settings.Succeeded && stats.Succeeded);
-                Check("cloud writes stay blocked throughout the title callback",
-                    (await saves.SaveCloudAsync("settings", data, token)).Failed);
-                reconciled = true;
-                return PlatformResult.Ok();
-            });
-            Check("the title reconciliation callback starts only from the runtime pump", !callbackStarted);
-            Check("successful reconciliation releases writes only after the callback",
-                (await fixture.Complete(reconciliation)).Succeeded && reconciled
-                && (await Save("settings", data)).Succeeded);
-            fixture.Lifecycle(PlatformLifecycleEvent.Suspending);
+            Check("same-account profile refresh preserves the acquired directory",
+                Equals(resumeRevision, Get(saves, "_revision"))
+                && ReferenceEquals(resumeFolder, Get(saves, "_folder")));
+            await File.WriteAllBytesAsync(Path.Combine(fixture.Folder, "settings"),
+                new byte[] { 12 });
             fixture.Resume();
-            var superseded = saves.ReconcileAsync(_ =>
-            {
-                fixture.Bind(Path.Combine(root, "account-c"));
-                return Task.FromResult(PlatformResult.Ok());
-            });
-            Check("an account change cancels reconciliation rather than enabling new-account writes",
-                (await fixture.Complete(superseded)).WasCanceled
-                && (await Save("settings", data)).Failed);
+            Check("reads use platform-updated files without a synchronization callback",
+                (await Load("settings")).Value!.SequenceEqual(new byte[] { 12 }));
 
             Set(fixture.Identity, "_user", null);
             typeof(GameCoreGameSaveService).GetMethod("OnLifecycleChanged", PrivateInstance)!
                 .Invoke(saves, [PlatformLifecycleEvent.Resumed]);
-            Check("resume invalidates the previously synchronized folder", Get(saves, "_folder") is null);
+            Check("resume invalidates the previously acquired folder", Get(saves, "_folder") is null);
             Check("signed-out reads cannot reuse a cached account folder",
                 (await Load("settings")).Status == PlatformStatus.Unavailable);
             var unpumped = saves.LoadCloudAsync("settings");
@@ -228,6 +227,12 @@ internal static class GameSaveFilesChecks
             var user = (User)RuntimeHelpers.GetUninitializedObject(typeof(User));
             Set(Identity, "_user", user);
             Set(Saves, "_saveUser", user);
+            CacheFolder(folder);
+        }
+
+        private void CacheFolder(string folder)
+        {
+            var user = (User)Get(Identity, "_user")!;
             var contextType = typeof(GameCoreGameSaveService).GetNestedType("SaveFolder", BindingFlags.NonPublic)!;
             var context = Activator.CreateInstance(contextType, [user, (long)Get(Saves, "_revision")!, folder]);
             Set(Saves, "_folder", context);
@@ -240,9 +245,8 @@ internal static class GameSaveFilesChecks
 
         internal void Resume()
         {
-            Set(Identity, "_user", null);
             Lifecycle(PlatformLifecycleEvent.Resumed);
-            Bind(Folder);
+            CacheFolder(Folder);
         }
 
         internal async Task<T> Complete<T>(Task<T> work)

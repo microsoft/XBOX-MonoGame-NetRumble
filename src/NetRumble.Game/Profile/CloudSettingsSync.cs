@@ -57,7 +57,7 @@ public sealed class CloudSettingsSync
     /// never had; taking the cloud copy is what makes signing in on a second console
     /// bring your settings with you, which is the only reason this tier exists.
     /// An absent record is a successful false. Failed reads and malformed records are
-    /// explicit failures so resume reconciliation cannot enable stale writes.
+    /// explicit failures rather than an absent settings record.
     /// </remarks>
     public async Task<PlatformResult<bool>> PullAsync(CancellationToken cancellationToken = default)
     {

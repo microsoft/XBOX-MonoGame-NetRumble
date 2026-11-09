@@ -53,11 +53,11 @@ been proven by anyone without access to that title and its sandbox.
 Run the native-independent save-file checks with
 `dotnet run --project tools\NetRumble.PlatformSpike -- --gamesave-files-checks-only`.
 They exercise temporary test folders, not the signed-in user's platform save folder.
-These checks also cover pump-delivered results, suspension cancellation and the
-resume write barrier. The game reconciles settings and achievement progress through
-the optional `ICloudSaveSynchronization` contract before enabling resumed-session writes.
+These checks also cover pump-delivered results, suspension cancellation and directory
+invalidation. The GDK owns synchronization outside the title process; the backend only
+acquires the per-user folder and performs file I/O.
 Run `dotnet run --project tools\NetRumble.GameSaveChecks -c Release` for the
-game-layer settings, progress-merge and stale-snapshot regressions. Neither suite
+game-layer initial-load, first-run settings and stale-snapshot regressions. Neither suite
 requires native sign-in or initializes a graphics device.
 
 ### Why `IGameInputService` is a null implementation

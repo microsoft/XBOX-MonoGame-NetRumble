@@ -7,7 +7,7 @@ namespace NetRumble.Game.Profile;
 
 /// <summary>
 /// The cumulative progress behind the five progressive achievements, persisted through
-/// <see cref="IGameSaveService"/>: local tier always, PlayFab cloud tier once signed in.
+/// <see cref="IGameSaveService"/>: local tier always, platform cloud tier once signed in.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -312,16 +312,6 @@ public sealed class AchievementStats
     /// </summary>
     public async Task SyncCloudAsync(IGameSaveService saves, CancellationToken cancellationToken = default)
     {
-        if ((await PullCloudAsync(saves, cancellationToken)).Succeeded)
-        {
-            await SaveAsync(saves, cancellationToken);
-        }
-    }
-
-    /// <summary>Merges synchronized cloud progress without writing back to the cloud.</summary>
-    public async Task<PlatformResult> PullCloudAsync(
-        IGameSaveService saves, CancellationToken cancellationToken = default)
-    {
         var result = await saves.LoadCloudAsync(SaveKey, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -329,20 +319,20 @@ public sealed class AchievementStats
         {
             // Offline, signed out, or the provider has no cloud tier. The local copy is
             // still authoritative for this device; nothing is lost.
-            return result.Result;
+            return;
         }
 
         if (result.Value is { Length: > 0 } bytes)
         {
             if (TryParse(bytes) is not { } cloud)
             {
-                return PlatformResult.Fail(PlatformStatus.Failed,
-                    "Could not read your saved progress.", "The cloud achievement record is malformed.");
+                NetRumble.Platform.Diagnostics.CrashLog.Mark("gamesave: the cloud achievement record is malformed.");
+                return;
             }
             MergeFrom(cloud);
         }
 
-        return PlatformResult.Ok();
+        await SaveAsync(saves, cancellationToken);
     }
 
     /// <summary>Writes both tiers. The cloud write is best-effort and never reported.</summary>

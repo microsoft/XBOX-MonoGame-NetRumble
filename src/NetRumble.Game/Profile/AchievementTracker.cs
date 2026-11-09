@@ -162,20 +162,14 @@ public sealed class AchievementTracker
         ReportPendingBinaryAchievements();
     }
 
-    /// <summary>Writes changed stats, or forces a write after resume reconciliation.</summary>
-    public async Task FlushAsync(CancellationToken cancellationToken = default, bool force = false)
+    /// <summary>Writes stats to both tiers if anything has changed.</summary>
+    public async Task FlushAsync(CancellationToken cancellationToken = default)
     {
-        if ((_stats.IsDirty || force) && !_ownerless)
+        if (_stats.IsDirty && !_ownerless)
         {
             await _stats.SaveAsync(_saves, cancellationToken);
         }
     }
-
-    /// <summary>Merges resumed-session cloud progress without discarding in-memory awards.</summary>
-    public Task<PlatformResult> ReconcileCloudAsync(CancellationToken cancellationToken = default)
-        => _ownerless
-            ? Task.FromResult(PlatformResult.Unavailable("No player owns the achievement progress."))
-            : _stats.PullCloudAsync(_saves, cancellationToken);
 
     /// <summary>
     /// Writes the local tier and waits for it, for callers with no later frame to be

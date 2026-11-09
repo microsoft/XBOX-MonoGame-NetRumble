@@ -81,28 +81,22 @@ sign-in also clears the shared PlayFab identity so another Host or Join can auth
 
 The user-data payload format is unchanged: Base64 under the existing keys, with a
 750-byte limit. The GDK provider always uses XGameSaveFiles, through GDK.Net's
-`GameSaveFiles.GetFolderWithUiAsync`. It acquires a synchronized folder on sign-in and
-again on resume; the OS handles cloud upload. The `NetRumbleSave` directory and unchanged
-key filenames preserve the platform's mapping from older containers and blobs.
+`GameSaveFiles.GetFolderWithUiAsync`. It obtains the signed-in user's save folder on
+the first file operation; the GDK handles synchronization outside the title process.
+Each save key names a file directly in the SDK-provided directory.
 File operations are serialized, writes replace a temporary file atomically, and account
 changes cancel active work and reject queued work captured for the old account.
-Suspension invalidates the folder synchronously and blocks further operations until
-resume. After reacquisition, `LifecycleCoordinator` reloads cloud settings and merges
-cloud achievement stats without resetting current progress. Cloud writes remain blocked
-until both reads succeed for the same save session; then the merged stats are persisted
-and pending achievement reports retried. Failed reconciliation leaves the write barrier
-in place and can retry when connectivity returns. Public cloud tasks are marshalled
-through `PumpDispatcher`, but shutdown drains the underlying workers without awaiting
-pump-dependent public completions. The title's reconciliation callback starts on the
-pump so it captures the game-thread synchronization context. The bounded exit flush
-keeps pumping runtime completions rather than waiting on a queue that has stopped.
+Suspension invalidates the folder synchronously and cancels outstanding file operations.
+After resume, the next read or write reacquires the folder. There is no title-side
+synchronization coordinator, reconciliation callback, write barrier or connectivity
+retry queue. Public cloud tasks are marshalled through `PumpDispatcher`, but shutdown
+drains the underlying workers without awaiting pump-dependent public completions.
+The bounded exit flush keeps pumping runtime completions rather than waiting on a
+queue that has stopped.
 First-run local settings are seeded without a cloud push, so the initial pull cannot
-be preceded by a write of defaults. Connectivity recovery queues behind an active
-reconciliation attempt and rechecks the online state, write barrier and resume
-generation before retrying.
+be preceded by a write of defaults.
 Shutdown waits for folder acquisition and file operations before releasing the runtime.
-See the [XGameSaveFiles overview](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/game-save/xgamesavefiles)
-and [API migration mapping](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/game-save/game-saves-walkthroughs-and-samples#interop-between-xgamesave-and-xgamesavefiles).
+See the [XGameSaveFiles overview](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/game-save/xgamesavefiles).
 
 ## Connectivity and lifecycle
 

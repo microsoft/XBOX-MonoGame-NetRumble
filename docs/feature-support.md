@@ -38,16 +38,15 @@ sample favours a low-latency demonstration over a queue that has to fill.
 
 The GDK provider saves to GDK connected storage (`XGameSaveFiles`), so settings, achievement
 stats and match history roam together and the platform resolves conflicts.
-GDK.Net's `GameSaveFiles.GetFolderWithUiAsync` acquires the per-user folder on sign-in
-and reacquires it on resume. Ordinary file I/O retains the `NetRumbleSave` directory and
-existing key names, matching the platform's container/blob mapping for older saves.
+GDK.Net's `GameSaveFiles.GetFolderWithUiAsync` acquires the per-user folder before the
+first file operation. Each save is a file named by its key directly in that directory.
 Writes use temporary files and atomic replacement; account changes invalidate queued work.
-Suspension also invalidates the folder and cancels outstanding work immediately. Reads
-and writes are refused while suspended. On resume, cloud writes stay blocked until the
-game reloads synchronized settings and merges achievement progress through
-`ICloudSaveSynchronization`. Failed or canceled reconciliation keeps writes blocked;
-another resume, or restored connectivity, retries it. A new sign-in starts a new save
-session. Public cloud-operation completions are delivered through the runtime pump.
+The GDK handles save synchronization outside the title process. The title only acquires
+the correct user's directory and reads or writes files; it has no synchronization
+callbacks, reconciliation barriers or connectivity retry queue. Account changes,
+suspension and resume invalidate the cached directory. The next file operation
+reacquires it before accessing files. Public cloud-operation completions are delivered
+through the runtime pump.
 
 The GDK provider always uses XGameSaveFiles; its save backend does not depend on
 PlayFab configuration. The separate PlayFab developer decorator uses PlayFab user
