@@ -33,31 +33,30 @@ as a contract rather than as an implementation detail.
 
 The result is that gameplay, UI and netcode contain no locks and no dispatcher.
 
-### An absent platform is a supported configuration
+### Require the platform without hiding failures
 
-A machine with no GDK installed is how the front end and the practice match are developed,
-so the provider reports availability and capabilities explicitly rather than pretending to
-succeed. Multiplayer is gated with a reason the player can read. Achievements, saves and
-presence degrade to working no-ops.
+The GDK provider reports availability and capabilities explicitly rather than pretending
+to succeed. GDK sign-in gates the main menu and all play, including Practice. A missing
+runtime or failed sign-in stays on the sign-in screen with a reason the player can read.
+Practice keeps its local simulation but uses the signed-in account for settings and progress.
 
 A capability flag means the whole path works end to end. The provider does not advertise
 `Invites` or `Presence` merely because an entry point binds, because a flag that means
 "this export resolved" is worse than no flag.
 
-### Compose orthogonal services as layers
+### Keep one platform session
 
-PlayFab cloud save and lobby discovery are independent of the transport, so they compose
-over whichever provider is active. They use the native GDK runtime even in developer
-modes. That is what makes
-`--platform=lan --playfab-title=<id>` work without an enum value for every combination of
-transport and cloud tier.
+The GDK provider owns identity, native runtime lifetime, Party and Lobby. Both `auto`
+and `gamecore` startup modes construct that provider. A missing runtime never selects
+another implementation or creates a guest identity. Local save storage and MonoGame
+input support belong to the GDK provider rather than an alternate platform.
 
 ### Use one native PlayFab identity
 
 Xbox login uses `PlayFabLocalUser.LoginAsync` once. The resulting entity serves Party,
-Lobby and the typed `PlayerDataManagement` user-data wrappers. No second Xbox-token
+and Lobby. No second Xbox-token
 exchange, client session ticket, custom HTTP client or REST request DTO is needed.
-Custom-ID authentication uses the native Authentication wrapper and remains Debug-only.
+There is no alternate developer authentication path.
 
 The service owns the native entity; cloud operations borrow duplicate handles so signing
 out cannot dispose the identity underneath an in-flight call. Shutdown cancels work and
@@ -79,8 +78,7 @@ is released. Only final shutdown actively drains completions while waiting. Lobb
 disposes Party and clears pending session work before notifying the game; expired
 sign-in also clears the shared PlayFab identity so another Host or Join can authenticate.
 
-The user-data payload format is unchanged: Base64 under the existing keys, with a
-750-byte limit. The GDK provider always uses XGameSaveFiles, through GDK.Net's
+The GDK provider uses XGameSaveFiles, through GDK.Net's
 `GameSaveFiles.GetFolderWithUiAsync`. It obtains the signed-in user's save folder on
 the first file operation; the GDK handles synchronization outside the title process.
 Each save key names a file directly in the SDK-provided directory.
@@ -106,9 +104,6 @@ The GDK sources a connectivity hint from the runtime's networking surface, and i
 property of the machine rather than of the signed-in user. It therefore lives on
 `IPlatformRuntime` as `IsConnectivityKnown`, `IsOnline`, `OfflineReason` and
 `ConnectivityChanged`, rather than in a service of its own.
-
-The LAN provider deliberately does not relay that hint, because "can this machine reach the
-internet" and "can this machine reach a peer on the LAN" are different questions.
 
 ### Connectivity fails open
 
@@ -178,18 +173,16 @@ ship input to the transport's sender id rather than to anything in the payload.
 
 ### The hole was in peer attribution
 
-The transports decided which peer id a datagram carried, which is the fact the entire
+The transport decided which peer id a message carried, which is the fact the entire
 authority model rests on, and no amount of codec validation can check it.
 
-- The Party path accepted a five-byte "welcome" control packet from **any** endpoint in the
-  session and treated the sender as host. Any player could take authority over another,
-  which is enough to teleport ships, rewrite scores or end the match.
-- The LAN transport identified peers by source address alone, with no handshake secret.
+The Party path accepted a five-byte "welcome" control packet from **any** endpoint in the
+session and treated the sender as host. Any player could take authority over another,
+which is enough to teleport ships, rewrite scores or end the match.
 
-Both are fixed. The Party path now requires the sender to be the actual host entity,
+The Party path now requires the sender to be the actual host entity,
 requires a join to be in flight, refuses to remap an endpoint already assigned to another
-peer, and validates the claimed id. The LAN transport issues an eight-byte per-link session
-token during the handshake and requires it on every link-scoped datagram.
+peer, and validates the claimed id.
 
 The transferable lesson: **audit identity attribution before you trust message
 validation.** Validating a message perfectly proves nothing if you cannot prove who sent
@@ -198,16 +191,10 @@ it.
 The control-packet magic value provides framing. It never provided identity, and treating a
 public constant as a secret is the mistake to look for.
 
-### What the LAN session token does not do
-
-The session token raises the cost of impersonation from "know two public constants" to
-"read this link's traffic". It is not encryption and it stops no on-path observer. See
-[Known gaps](known-gaps.md#networking).
-
 ### Bounds belong next to the parsing
 
-Alongside the identity fixes, the review added a networked projectile ceiling, a world-size
-sanity range, an inbox cap of 4096 packets and a 256-slot bound on reliable reordering.
+Alongside the identity fixes, the review added a networked projectile ceiling and a
+world-size sanity range.
 These are resource limits rather than correctness fixes, and they belong next to the code
 that parses untrusted input.
 
@@ -284,26 +271,7 @@ This class of bug is the strongest argument for using a maintained managed proje
 instead of hand-written interop. None of those signatures is this repository's to get wrong
 any more.
 
-### Do not conclude a native SDK is usable from its export list
-
-The native PlayFab DLLs export the authentication functions you would want to call. They
-export no `XAsync*` or `XTaskQueue*` symbols, so managed code cannot complete the async
-operations those functions return. The sample speaks PlayFab's documented HTTPS JSON API
-instead, which needs no native dependency at all.
-
 ## Testing lessons
-
-### A passing test that proved nothing
-
-A test that forged a UDP datagram to prove the LAN session token was enforced passed even
-when the token check was disabled. The attacker socket used a different ephemeral source
-port, so the datagram was rejected for having no link at all, before token validation was
-ever reached.
-
-**Disable the defence and confirm the test fails.** A security test that has never failed
-has never been shown to test anything. The fix was to rename the test to describe what it
-actually proves, add direct checks on the framing layer, and pin the maximum fragment
-payload against the token prefix that now precedes it.
 
 ### Test the consumer as well as the data
 
@@ -354,8 +322,6 @@ Short facts that cost time to establish.
 - PlayFab creates a statistic on first write with last-value-wins aggregation, so an
   unconfigured high-score table ranks the most recent score rather than the best one. It
   cannot be set from code.
-- PlayFab user-data values are capped at 1,000 characters, which is roughly 750 bytes after
-  Base64 encoding.
 
 ## Measured results
 
@@ -363,7 +329,6 @@ Short facts that cost time to establish.
 |---|---|
 | Idle `Pump()` cost | 0.01 to 0.03 microseconds against a 16.6 ms frame budget |
 | Practice bots | Eight-player start in 0 ms, ten seconds of simulation in 38 ms |
-| LAN transport | A 31-object world snapshot survived fragmentation and reassembly intact |
 | Connectivity grace period | Sustained loss ended the match at exactly 8.0 s; a 4.0 s flap did not |
 | Constrain handling | Elapsed time held at 0.00 s for four seconds, then resumed normally after unconstrain |
 | Controller overlay | Match clock ran 9:55 to 9:52 underneath the overlay, with a bot scoring during it |

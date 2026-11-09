@@ -69,6 +69,6 @@ public interface IPlatformProvider : IAsyncDisposable
     /// <summary>Gamepad reading and haptics.</summary>
     IGameInputService GameInput { get; }
 
-    /// <summary>Platform UI: account picker, virtual keyboard, store pages.</summary>
+    /// <summary>Platform-owned text-entry UI.</summary>
     IPlatformUiService PlatformUi { get; }
 }

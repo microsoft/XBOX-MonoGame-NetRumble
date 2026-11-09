@@ -8,8 +8,8 @@ using NetRumble.Core.Net;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Replication is the one part of the port that cannot be exercised by the offline
-/// provider - <see cref="OfflineMatchNetwork"/> swallows every broadcast by design. This
+/// Replication cannot be exercised by the single-player
+/// <see cref="OfflineMatchNetwork"/>, which swallows every broadcast by design. This
 /// double is deliberately not a socket: it keeps the checks deterministic and lets a test
 /// hold messages back to reproduce reordering, which is the failure mode the snapshot
 /// frame guard exists for.

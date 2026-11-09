@@ -17,10 +17,8 @@ namespace NetRumble.Game;
 /// processing - so the port inherited the pattern without inheriting the guarantee.
 /// </para>
 /// <para>
-/// On desktop this mostly gets away with it, which is why it survived this long. It was
-/// caught by a LAN client crashing in <c>LanLink.Retransmit</c> with "collection was
-/// modified": the lobby's join continuation was sending on a pool thread while the game
-/// thread serviced the same link. The same shape on console is worse than an exception,
+/// A lobby's join continuation can send on a pool thread while the game thread services
+/// the same connection. On console this is worse than a managed exception,
 /// because the Xbox graphics and Party layers are reached through native calls that
 /// assume the thread that owns them - and a native access violation takes the title
 /// straight back to the dashboard with nothing logged.

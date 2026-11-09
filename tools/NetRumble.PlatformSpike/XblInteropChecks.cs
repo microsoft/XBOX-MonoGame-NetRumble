@@ -2,7 +2,6 @@ using GDK.Net;
 using GDK.Net.SystemInfo;
 using GDK.Net.Users;
 using GDK.Net.XboxLive;
-using NetRumble.Platform.Composition;
 using NetRumble.Platform.GameCore.Interop;
 
 /// <summary>
@@ -39,22 +38,16 @@ using NetRumble.Platform.GameCore.Interop;
 /// </remarks>
 internal static class XblInteropChecks
 {
-    public static void Run(PlatformProviderMode mode)
+    public static void Run()
     {
         const string Heading = "[11] Xbox Services through GDK.Net (real Microsoft.Xbox.Services.C.Thunks.dll)";
-
-        if (!GdkCheckGate.ShouldRun(mode, Heading))
-        {
-            return;
-        }
 
         Console.WriteLine(Heading);
 
         if (!XblRuntimeProbe.IsAvailable)
         {
             // Not a failure - see XblRuntimeProbe's own remarks: this redistributable
-            // is not required to build or to run offline, only staged for this harness
-            // by NetRumble.PlatformSpike.csproj when the GDK is installed.
+            // is staged by NetRumble.PlatformSpike.csproj when the GDK is installed.
             Console.WriteLine($"    SKIP {XblRuntimeProbe.UnavailableReason}");
             Console.WriteLine();
             return;

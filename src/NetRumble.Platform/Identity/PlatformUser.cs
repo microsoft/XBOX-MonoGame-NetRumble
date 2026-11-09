@@ -22,18 +22,11 @@ public sealed record PlatformUser
     /// <summary>Display name shown in the roster and lobby (the Xbox gamertag).</summary>
     public required string DisplayName { get; init; }
 
-    /// <summary>Xbox user id. Empty when signed in by a non-Xbox path.</summary>
+    /// <summary>Xbox user id for the signed-in GDK account.</summary>
     public string XboxUserId { get; init; } = string.Empty;
 
-    /// <summary>PlayFab entity id, needed by Party and Lobby. Empty when offline.</summary>
+    /// <summary>PlayFab entity id, needed by Party and Lobby. Empty until PlayFab sign-in succeeds.</summary>
     public string EntityId { get; init; } = string.Empty;
-
-    /// <summary>
-    /// True when this session used the <c>--pf-user</c> custom-id developer override
-    /// rather than a real Xbox sign-in. Debug desktop builds only; see
-    /// <see cref="IIdentityService.SignInAsync"/>.
-    /// </summary>
-    public bool IsDeveloperOverride { get; init; }
 
     /// <summary>
     /// The account category the platform reports for this user (XR-013).

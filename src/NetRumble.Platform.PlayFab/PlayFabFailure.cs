@@ -18,7 +18,7 @@ internal static class PlayFabFailure
         }
         if (ex is GameRuntimeException { HResultCode: PlayFabErrors.LobbyNotJoinable or PlayFabErrors.LobbyDoesNotExist })
         {
-            return PlatformResult.Fail(PlatformStatus.Failed,
+            return PlatformResult.Fail(PlatformStatus.SessionNotJoinable,
                 "This match is full or no longer accepts players.", ex.Message);
         }
 
