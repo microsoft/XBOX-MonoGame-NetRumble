@@ -214,6 +214,7 @@
       <GdkxLayoutBinary Include="$(GdkxRedistDir)Party.dll" />
       <GdkxLayoutBinary Include="$(GdkxRedistDir)PlayFabCore.dll" />
       <GdkxLayoutBinary Include="$(GdkxRedistDir)PlayFabServices.dll" />
+      <GdkxLayoutBinary Include="$(GdkxRedistDir)PlayFabMultiplayer.dll" />
       <GdkxLayoutBinary Include="$(GdkxRedistDir)libHttpClient.dll" />
       <GdkxLayoutBinary Include="$(GdkxRedistDir)Microsoft.Xbox.Services.C.Thunks.dll" />
       <!--
@@ -230,6 +231,8 @@
            Text="PlayFab Core was not found at '$(GdkxRedistDir)'. It ships with the GDK's Xbox extensions and is required for PlayFab sign-in." />
     <Error Condition="!Exists('$(GdkxRedistDir)PlayFabServices.dll')"
            Text="PlayFab Services was not found at '$(GdkxRedistDir)'. It ships with the GDK's Xbox extensions and is required by PlayFabRuntime.Initialize()." />
+    <Error Condition="!Exists('$(GdkxRedistDir)PlayFabMultiplayer.dll')"
+           Text="PlayFab Multiplayer was not found at '$(GdkxRedistDir)'. It ships with the GDK's Xbox extensions and is required for native Lobby discovery." />
     <Error Condition="!Exists('$(GdkxThunksDir)xgameruntime.thunks.dll')"
            Text="The console Gaming Runtime thunks were not found at '$(GdkxThunksDir)'. Build console\XGameRuntimeThunks\XGameRuntimeThunks.vcxproj, or use tools\Build-Gdkx.ps1." />
     <Error Condition="!Exists('$(GdkxStoreLogos)StoreLogo.png')"
