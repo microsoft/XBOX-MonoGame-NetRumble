@@ -12,8 +12,8 @@ namespace NetRumble.Game.Profile;
 /// <b>The local tier is not this class's job.</b> <see cref="PlayerProfile"/> already
 /// owns an INI file under local app data, keeping Godot's <c>ConfigFile</c> section and
 /// key names so either port can read the other's settings. That file stays the local
-/// tier - it is read before sign-in and must keep working for a player who never signs
-/// in at all. This class adds the second tier on top and nothing else.
+/// tier, loaded for the account once sign-in completes. This class adds the second
+/// tier on top and nothing else.
 /// </para>
 /// <para>
 /// <b>Why the payload is <see cref="PlayerProfile.ToDictionary"/> and not the INI.</b>
@@ -22,18 +22,11 @@ namespace NetRumble.Game.Profile;
 /// entire point of putting settings in the cloud for a title that ships on three
 /// engines. The INI's Godot-shaped names are a local-file detail.
 /// </para>
-/// <para>
-/// <b>Size.</b> PlayFab caps a user-data value at 1,000 characters, which is 750 bytes
-/// once Base64-encoded. This payload is ten scalars and lands around 200 bytes, so it
-/// fits with room to spare - and <c>PlayFabGameSaveService</c> refuses an oversized write
-/// up front rather than letting the service return a bare 400. Match history is
-/// deliberately *not* synced for exactly this reason; see <see cref="MatchHistoryStore"/>.
-/// </para>
 /// </remarks>
 public sealed class CloudSettingsSync
 {
     /// <summary>
-    /// The user-data key. Matches the C++ sample's save name, so the three builds share
+    /// The cloud-save key. Matches the C++ sample's save name, so the three builds share
     /// one record rather than each writing its own.
     /// </summary>
     public const string SaveKey = "settings";

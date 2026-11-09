@@ -7,7 +7,6 @@
     references, no MonoGame, no System.Runtime.InteropServices usage.
     It is the contract that every provider implements:
 
-      - NetRumble.Platform.Offline    (no-op, runs on an unconfigured dev box)
       - NetRumble.Platform.GameCore   (P/Invoke over the native GDK/PlayFab DLLs)
       - <future> NetRumble.Platform.GdkSharp (a standalone C# GDK)
 

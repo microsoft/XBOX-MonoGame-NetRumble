@@ -258,25 +258,3 @@ build.
 `JsonTypeInfo<T>` at the call site, so a missing registration is a compile error rather
 than a runtime failure. Do not paper over it by rooting the whole assembly in a runtime
 directives file.
-
-## Test harness
-
-### The offline spike reports three failures on a GDK machine
-
-**Symptom.** `dotnet run --project tools\NetRumble.PlatformSpike -- --platform=offline`
-reports failures including `0x89240100`.
-
-**Cause.** Two of the checks call Party and XBOX services directly to verify the native
-ABI, regardless of which provider is selected. The offline provider deliberately does not
-initialize the Gaming Runtime, so those calls fail.
-
-**Fix.** Nothing to fix. Read those as environment checks rather than as offline-provider
-regressions. The default and `gamecore` modes are the regression gate.
-
-### A security test passes even with the check removed
-
-If you write a test that forges traffic, confirm that it fails when you disable the
-defence it is meant to exercise. One test in this repository passed with its token check
-disabled, because the forged datagram arrived from a different ephemeral source port and
-was rejected earlier for a reason the test was not measuring. See
-[Design notes](design-notes.md#a-passing-test-that-proved-nothing).

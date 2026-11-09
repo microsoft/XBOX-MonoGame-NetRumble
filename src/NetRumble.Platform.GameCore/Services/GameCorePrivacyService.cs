@@ -34,7 +34,7 @@ namespace NetRumble.Platform.GameCore.Services;
 /// had already gated whether chat happens at all; the pre-certification audit rejected
 /// that, because XR-015's carve-out for skipping per-peer checks applies only to
 /// "scenarios that involve significant player counts", which a four-player session is
-/// not. Offline and LAN sessions reach their own providers and are unaffected.
+/// not.
 /// </para>
 /// <para>
 /// <b>Unverifiable in this environment.</b> Needs a live Xbox Services connection and,
@@ -110,9 +110,7 @@ internal sealed class GameCorePrivacyService : IPrivacyService
         {
             // Fails closed (XR-015). This is the GDK provider: if it is live at all, the
             // title believes it is on the Xbox network, and a roster it cannot evaluate is
-            // a roster whose communication settings it does not know. Offline and LAN play
-            // reach their own providers, which allow all, so nothing that legitimately has
-            // no privacy service is muted by this.
+            // a roster whose communication settings it does not know.
             foreach (var xuidString in xboxUserIds)
             {
                 verdicts[xuidString] = PrivacyVerdict.DenyAll;

@@ -38,8 +38,7 @@ namespace NetRumble.Platform.GameCore.Services;
 /// <see cref="SetPresenceAsync"/> through <c>.Presence</c>. All of them need a signed-in
 /// user and a live Xbox Services context, so all of them degrade to
 /// <see cref="PlatformResult.Unavailable(string)"/> rather than throwing when there is
-/// none - exactly like <c>NetRumble.Platform.Offline</c>'s stub, so the game plays
-/// offline on a machine with no GDK.
+/// none.
 /// </para>
 /// <para>
 /// <b>None of it has been exercised against a live service.</b> This checkout has a
@@ -412,8 +411,7 @@ internal sealed class GameCoreActivityService : IActivityService
         _groupId = null;
 
         // Nothing was ever published, so there is nothing to clear and no failure for the
-        // caller to react to. This also keeps the offline-equivalent behaviour on a
-        // machine with no GDK, where the session simply never advertised itself.
+        // caller to react to.
         if (!_activityPublished || !_xbl.TryGetContext(out var context))
         {
             _activityPublished = false;
@@ -670,8 +668,7 @@ internal sealed class GameCoreActivityService : IActivityService
     /// <b><paramref name="status"/> is a presence string id, not display text.</b> Xbox
     /// rich presence strings live in the title's service configuration and are referenced
     /// by id; XSAPI has no way to show free text a title invents at runtime. The
-    /// interface's parameter is a bare string because the offline provider has no such
-    /// constraint, so this provider treats it as the configured id and an empty value as
+    /// provider treats the parameter as the configured id and an empty value as
     /// "active in title, no specific string".
     /// </para>
     /// <para>

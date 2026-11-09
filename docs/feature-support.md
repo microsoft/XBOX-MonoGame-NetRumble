@@ -9,19 +9,21 @@ have only ever compiled.
 
 ## Platform feature matrix
 
-| Feature | XBOX on PC | XBOX Series X\|S | LAN (no GDK, no account) | Offline |
-|---|---|---|---|---|
-| XBOX identity exchanged for a PlayFab identity | XBOX linked | XBOX linked | Local player only | No online identity |
-| PlayFab Lobby discovery and Party transport | Yes | Yes | Real UDP transport with a five-character join code | Practice only |
-| PlayFab Party voice and speech-to-text captions | Subject to XBOX policy | Subject to XBOX policy | Text only, no audio | Unavailable |
-| XBOX privileges, privacy, string verification, reporting | Yes | Yes | Bypassed | Unavailable |
-| XBOX friends, activity, invites, recent players | Yes | Yes | Unavailable, because there is no platform surface to carry a join string | Unavailable |
-| XBOX achievement reporting | Yes | Yes | Local counters only, no XBOX award | Local counters only |
-| Rich presence | Yes | Yes | Unavailable | Unavailable |
-| Roaming cloud save for settings and achievement stats | Connected storage (`XGameSaveFiles`) | Connected storage (`XGameSaveFiles`) | PlayFab user data with `--playfab-title=<id>` | Local file only |
-| Match history and counters | Local, per user | Local, per user | Local | Local |
-| Connectivity gating before online play is offered | Platform hint when known | Platform hint when known | Not gated | Not offered |
-| Lifecycle and controller detection | Focus and device detection | Suspend, resume, constrain, association detection | Desktop behaviour | Depends on platform |
+| Feature | XBOX on PC | XBOX Series X\|S |
+|---|---|---|
+| XBOX identity exchanged for a PlayFab identity | XBOX linked | XBOX linked |
+| PlayFab Lobby discovery and Party transport | Yes | Yes |
+| PlayFab Party voice and speech-to-text captions | Subject to XBOX policy | Subject to XBOX policy |
+| XBOX privileges, privacy, string verification, reporting | Yes | Yes |
+| XBOX friends, activity, invites, recent players | Yes | Yes |
+| XBOX achievement reporting | Yes | Yes |
+| Rich presence | Yes | Yes |
+| Roaming cloud save for settings and achievement stats | Connected storage (`XGameSaveFiles`) | Connected storage (`XGameSaveFiles`) |
+| Match history and counters | Local, per user | Local, per user |
+| Connectivity gating before online play is offered | Platform hint when known | Platform hint when known |
+| Lifecycle and controller detection | Focus and device detection | Suspend, resume, constrain, association detection |
+
+Both platforms require GDK sign-in, including for single-player Practice.
 
 ## Scope of the game itself
 
@@ -34,7 +36,7 @@ The sample is a single four-player free-for-all deathmatch. It deliberately has:
 Discovery uses **PlayFab Lobby**, not PlayFab Matchmaking queues or tickets, because the
 sample favours a low-latency demonstration over a queue that has to fill.
 
-## Cloud save tiers
+## Cloud save
 
 The GDK provider saves to GDK connected storage (`XGameSaveFiles`), so settings, achievement
 stats and match history roam together and the platform resolves conflicts.
@@ -48,7 +50,7 @@ suspension and resume invalidate the cached directory. The next file operation
 reacquires it before accessing files. Public cloud-operation completions are delivered
 through the runtime pump.
 
-Neither tier has been round-tripped between two devices. See
+Cloud save has not been round-tripped between two devices. See
 [Known gaps](known-gaps.md#never-observed-end-to-end).
 
 ## Known rough edges

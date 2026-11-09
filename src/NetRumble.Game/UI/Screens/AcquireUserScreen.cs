@@ -18,7 +18,7 @@ namespace NetRumble.Game.UI.Screens;
 /// Sign-in owns this screen so profile acquisition and the online-service exchange
 /// finish before the main menu becomes interactive. The simplified user model supplies
 /// the default Xbox user without an account picker; failures still need a visible retry
-/// or offline choice rather than a quiet "Not signed in" label.
+/// rather than a quiet "Not signed in" label.
 /// </para>
 /// <para>
 /// <b>Boot vs sign-in are two different waits.</b> <see cref="NetRumbleGame.PlatformSettled"/>
@@ -82,13 +82,14 @@ public sealed class AcquireUserScreen : MenuScreen
     private string _detail = string.Empty;
     private float _stageStartedAt;
     private float _readyEnteredAt;
+    private string? _readyUserId;
     private bool _stalled;
     private bool _signingIn;
     private bool _exited;
     private UiContext? _enteredContext;
 
     /// <summary>
-    /// Sign-in is the gate to everything online, so unlike most screens this is never
+    /// Sign-in is the gate to the game, so unlike most screens this is never
     /// dismissed by Back; the player leaves through one of its own rows.
     /// </summary>
     public AcquireUserScreen() => AllowBack = false;
@@ -203,7 +204,6 @@ public sealed class AcquireUserScreen : MenuScreen
         }
 
         List.AddButton("Try Again", () => BeginSignIn(context));
-        List.AddButton("Continue Offline", () => ContinueOffline(context));
 
         // Desktop only, for the same reason as the main menu's row: on console the Guide
         // is the way out, and this screen is reached before the player has committed to
@@ -320,6 +320,12 @@ public sealed class AcquireUserScreen : MenuScreen
 
     private void EnterWaitingForInput(UiContext context)
     {
+        if (!context.Game.PlatformReady)
+        {
+            EnterNeedsInteraction(context, context.Game.PlatformStatusDetail);
+            return;
+        }
+
         _stage = Stage.WaitingForInput;
         _status = "Press any key to continue";
         _detail = string.Empty;
@@ -331,7 +337,7 @@ public sealed class AcquireUserScreen : MenuScreen
     /// <c>Services.sign_in()</c> was documented to be, so "Try Again" can never start a
     /// second chain racing the one still running underneath a stalled first attempt.
     /// </summary>
-    private void BeginSignIn(UiContext context)
+    internal void BeginSignIn(UiContext context)
     {
         if (_signingIn)
         {
@@ -352,7 +358,7 @@ public sealed class AcquireUserScreen : MenuScreen
 
     private async Task RunSignInAsync(UiContext context)
     {
-        var result = await context.Platform.Identity.SignInAsync(context.InteractiveSignIn);
+        var result = await context.Platform.Identity.SignInAsync(SignInOptions.Interactive);
         context.Platform.Identity.SignInStageChanged -= OnSignInStageChanged;
         _signingIn = false;
 
@@ -361,9 +367,9 @@ public sealed class AcquireUserScreen : MenuScreen
             return;
         }
 
-        if (result.Succeeded)
+        if (result.Succeeded && result.Value is { } user
+            && context.Platform.Identity.CurrentUser?.LocalId == user.LocalId)
         {
-            var user = result.Value!;
             context.Profile.SetIdentity(user.DisplayName, user.EntityId, user.XboxUserId);
 
             // Re-home the local settings file onto this account's own path before the
@@ -381,13 +387,16 @@ public sealed class AcquireUserScreen : MenuScreen
 
             if (_exited)
             {
-                // Both awaits above are round trips to a remote service, so the screen
-                // can have been left in the meantime - by the stall rows' "Continue
-                // Offline", for one.
                 return;
             }
 
-            EnterReady(context, user.DisplayName, user.IsDeveloperOverride);
+            if (context.Platform.Identity.CurrentUser?.LocalId != user.LocalId)
+            {
+                EnterNeedsInteraction(context, "The signed-in account changed. Please sign in again.");
+                return;
+            }
+
+            EnterReady(context, user);
         }
         else
         {
@@ -417,7 +426,7 @@ public sealed class AcquireUserScreen : MenuScreen
         _stalled = true;
         _status = "Still signing in";
         var stage = _detail.Length == 0 ? "Sign-in" : _detail;
-        _detail = $"{stage} is taking longer than expected.\nYou can keep waiting, or continue without signing in.";
+        _detail = $"{stage} is taking longer than expected.\nSign-in is required. Please keep waiting.";
         Rebuild(context);
     }
 
@@ -430,24 +439,28 @@ public sealed class AcquireUserScreen : MenuScreen
         Rebuild(context);
     }
 
-    private void EnterReady(UiContext context, string displayName, bool isDeveloperOverride)
+    private void EnterReady(UiContext context, PlatformUser user)
     {
         _stage = Stage.Ready;
         _stalled = false;
         _readyEnteredAt = context.Time;
 
-        // Makes a --pf-user test client obvious so it is never mistaken for a real
-        // sign-in while debugging a Party session.
-        var suffix = isDeveloperOverride ? "  (test user)" : string.Empty;
-        _status = $"Signed in as {displayName}{suffix}";
+        _readyUserId = user.LocalId;
+        _status = $"Signed in as {user.DisplayName}";
         _detail = string.Empty;
         Rebuild(context);
     }
 
-    /// <summary>Practice mode needs no identity, so offline is a real choice, not a dead end.</summary>
-    private static void ContinueOffline(UiContext context) => context.Screens.ReplaceAll(new MainMenuScreen());
+    private void HandOff(UiContext context)
+    {
+        if (context.Platform.Identity.CurrentUser?.LocalId != _readyUserId)
+        {
+            EnterNeedsInteraction(context, "The signed-in account changed. Please sign in again.");
+            return;
+        }
 
-    private static void HandOff(UiContext context) => context.Screens.ReplaceAll(new MainMenuScreen());
+        context.Screens.ReplaceAll(new MainMenuScreen());
+    }
 
     private static void ConfirmQuit(UiContext context)
     {

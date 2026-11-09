@@ -24,7 +24,9 @@ try
     Check("the first cloud pull preserves the other device's settings",
         (await firstRunSettings.PullAsync()).Succeeded && firstRunProfile.MasterVolume == 0.8f);
 
-    var profile = new PlayerProfile("test-player", root) { MasterVolume = 0.2f };
+    var profile = new PlayerProfile(root);
+    profile.Rehome("test-player");
+    profile.MasterVolume = 0.2f;
     var settings = new CloudSettingsSync(saves, profile);
     profile.AttachCloudSave(settings);
     saves.Cloud[CloudSettingsSync.SaveKey] = """{"masterVolume":0.8}"""u8.ToArray();
