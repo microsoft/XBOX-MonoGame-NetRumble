@@ -1,7 +1,7 @@
 namespace NetRumble.Platform;
 
 /// <summary>
-/// Platform-owned UI: the virtual keyboard, account picker and store pages.
+/// Platform-owned text-entry UI.
 /// </summary>
 /// <remarks>
 /// Ported from <c>scripts/ui/elements/nr_system_keyboard.gd</c>, which routed text
@@ -24,9 +24,6 @@ public interface IPlatformUiService
     Task<PlatformResult<string>> ShowTextEntryAsync(
         TextEntryRequest request,
         CancellationToken cancellationToken = default);
-
-    /// <summary>Shows the account picker so the player can switch users.</summary>
-    Task<PlatformResult> ShowAccountPickerAsync(CancellationToken cancellationToken = default);
 }
 
 public sealed record TextEntryRequest

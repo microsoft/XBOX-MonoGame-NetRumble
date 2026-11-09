@@ -1,6 +1,5 @@
 using NetRumble.Platform.Networking;
 using NetRumble.Platform;
-using NetRumble.Platform.Composition;
 using NetRumble.Platform.GameCore;
 using NetRumble.Platform.GameCore.Services;
 using NetRumble.Platform.PlayFab;
@@ -23,14 +22,9 @@ using NetRumble.Platform.PlayFab;
 /// </remarks>
 internal static class GameCorePartyAndActivityChecks
 {
-    public static async Task Run(PlatformProviderMode mode)
+    public static async Task Run()
     {
         const string Heading = "[13] GameCore Party/Activity degrade paths and URI parsing";
-
-        if (!GdkCheckGate.ShouldRun(mode, Heading))
-        {
-            return;
-        }
 
         Console.WriteLine(Heading);
 
@@ -184,8 +178,7 @@ internal static class GameCorePartyAndActivityChecks
         var chat = party.SendChatText("hello");
         Check("SendChatText fails cleanly without a session", chat.Failed);
 
-        // Never throws even though there is no bridge and no queue to leave - matches
-        // OfflinePartyService's own no-op contract.
+        // Leaving without a session is idempotent.
         await party.LeaveAsync().ConfigureAwait(false);
         Check("LeaveAsync completes without a session", true);
     }
@@ -281,10 +274,8 @@ internal static class GameCorePartyAndActivityChecks
     }
 
     /// <summary>
-    /// A configured GDK provider should expose its own cloud-save service directly, not
-    /// delegate to the offline fallbacks. Without a signed-in Xbox user it cannot
-    /// succeed; what it must not do is quietly report success or behave like the offline
-    /// stub.
+    /// A configured GDK provider exposes its own cloud-save service directly.
+    /// Without a signed-in Xbox user it must fail rather than quietly report success.
     /// </summary>
     /// <remarks>
     /// Connected storage has no user handle and no initialized Gaming Runtime here,

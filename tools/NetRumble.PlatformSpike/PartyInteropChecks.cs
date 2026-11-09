@@ -2,7 +2,6 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using GDK.Net.PlayFab.Party;
 using NetRumble.Platform;
-using NetRumble.Platform.Composition;
 using NetRumble.Platform.GameCore.Interop;
 
 /// <summary>
@@ -62,13 +61,8 @@ internal static class PartyInteropChecks
     private static readonly PlayFabConfiguration Configuration =
         PlayFabConfiguration.Resolve(Environment.GetCommandLineArgs());
 
-    public static void Run(PlatformProviderMode mode)
+    public static void Run()
     {
-        if (!GdkCheckGate.ShouldRun(mode, "[10] Party through GDK.Net (real Party.dll)"))
-        {
-            return;
-        }
-
         Console.WriteLine("[10] Party through GDK.Net (real Party.dll)");
 
         // Party imports the WinRT and COM API sets, and the harness reaches this point on
@@ -116,8 +110,7 @@ internal static class PartyInteropChecks
         var libraryPath = FindPartyLibrary();
         if (libraryPath is null)
         {
-            // Not a failure. The redistributable is not required to build or to run an
-            // offline match, and this harness must stay runnable on a machine without it.
+            // The harness can verify the remaining failure paths without this redistributable.
             Console.WriteLine("    SKIP Party.dll not found; Party checks skipped");
             Console.WriteLine();
             return;

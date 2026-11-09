@@ -29,7 +29,7 @@ Alongside the publish output, the layout carries:
 
 Nothing installs those redistributables machine-wide, and inside a package only what the
 layout carries can be loaded. A package built without them installs and launches but
-degrades to offline. They come from the installed GDK. `third_party\party` is the fallback
+cannot sign in or use the affected services. They come from the installed GDK. `third_party\party` is the fallback
 for the three binaries it vendors, which are desktop builds and therefore correct for this
 target.
 

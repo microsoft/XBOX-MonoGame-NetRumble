@@ -52,10 +52,8 @@ public readonly record struct MatchHistoryEntry(
 /// <remarks>
 /// <para>
 /// <b>Local only, deliberately.</b> This is the one save this port does not put in the
-/// cloud. PlayFab caps a user-data value at 750 bytes once Base64-encoded, and a history
-/// long enough to be worth reading does not fit; truncating it to what does would make
-/// the cloud copy strictly worse than the local one it replaced. Settings and achievement
-/// stats are small and are synced; see <see cref="CloudSettingsSync"/> and
+/// cloud. History is appended through the local save tier; settings and achievement
+/// stats are synced through the cloud tier. See <see cref="CloudSettingsSync"/> and
 /// <see cref="AchievementStats"/>.
 /// </para>
 /// <para>

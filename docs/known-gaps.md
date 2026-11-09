@@ -43,14 +43,6 @@ Haptics are absent and are not required.
 
 ## Networking
 
-- **The LAN transport is not internet safe.** Protocol version 2 added a per-link session
-  token, which raises the bar from "know two public constants" to "read this link's
-  traffic". It is not encryption and it stops no on-path observer. There is also no
-  congestion control and no RTT estimation. Either address those properly or keep the
-  transport inside its stated scope, which is development and same-network testing.
-- **`LoginWithCustomID` must never reach a shipping build.** It authenticates nobody. It is
-  gated behind `SignInOptions.DeveloperCustomId` today, and that gate needs enforcing
-  rather than documenting.
 - **Privacy permissions are checked one player at a time.** The batch API returns nested
   variable-stride unmanaged arrays and was judged the riskier binding. See
   [Design notes](design-notes.md#prefer-the-shape-you-can-marshal-correctly). Revisit only
@@ -105,11 +97,10 @@ usually because it needs a signed-in account, XBOX Series X|S hardware or a seco
   XGameSaveFiles through GDK.Net on the GDK provider. File reads/writes, absent-file
   first run, cancellation, and queued account-switch isolation are checked in temporary
   test folders. Authenticated folder acquisition, system conflict UI, resume sync, and
-  roaming still need real accounts and a second device. The PlayFab tier has been proven
-  against a fake cloud tier only.
+  roaming still need real accounts and a second device.
 - **Behaviour under real network conditions.** Join and invite flows are confirmed between
   two XBOX Series X|S consoles before the native PlayFab migration. Native authentication,
-  user-data roaming, connected lobby creation/join, token renewal and host cleanup need
+  connected lobby creation/join, token renewal and host cleanup need
   another authenticated two-device pass. The three reliability tiers have only ever run on one machine over
   loopback and a local adapter, which exercises no latency, no jitter and no genuine packet
   loss.

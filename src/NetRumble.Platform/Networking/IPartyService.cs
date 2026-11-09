@@ -20,9 +20,8 @@ namespace NetRumble.Platform;
 /// <see cref="MessageDelivery.UnreliableSequenced"/>.
 /// </para>
 /// <para>
-/// A provider is free to implement this over something other than Party (a LAN/UDP
-/// provider for local testing is an obvious second implementation) — nothing in this
-/// interface names Party.
+/// A provider is free to implement this over another transport without changing
+/// the game-facing contract.
 /// </para>
 /// </remarks>
 public interface IPartyService

@@ -14,10 +14,6 @@ dotnet run --project tools\NetRumble.PlatformSpike
 dotnet run --project tools\NetRumble.PlatformSpike -- --platform=gamecore
 ```
 
-`--platform=offline` reports three failures on a machine with the GDK installed, and that
-is expected. See
-[the offline spike](docs/troubleshooting.md#the-offline-spike-reports-three-failures-on-a-gdk-machine).
-
 ## Write the reasoning down
 
 If you close something in [Known gaps](docs/known-gaps.md), add the reasoning to
