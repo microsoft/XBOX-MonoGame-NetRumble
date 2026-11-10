@@ -82,6 +82,35 @@ The game reads pads directly through MonoGame `GamePad` and `Keyboard` in `Local
 `IIdentityService` instead, because which controller belongs to which player is a fact
 about an account rather than a reading from a device.
 
+### Party teardown and pump ownership
+
+The six native Party teardown waits share one six-second budget. The deadline can
+resume teardown on a worker thread, so manager access, pending-wait registration,
+reset and frame pumping share the same gate. A reset detaches its pending waits
+atomically. When reset or disposal reenters from a pump callback, native disposal
+and detached-wait cancellation finish after native state-change enumeration exits,
+not inside it. Cleanup outside a pump completes directly without requiring another
+frame. Every reset retires its old native manager, including a host-closing reset
+that cancels an already pending leave. Session revisions prevent an older leave
+from tearing down a newer session.
+Host/join attempts retain their original revision through native continuations
+and failure/cancellation cleanup; an old attempt cannot adopt a replacement
+session's revision by starting a new parameterless leave.
+Connection and authentication completion waits are registered together before the
+pump can observe either result, so early authentication cannot be discarded while
+the caller is still waiting for the connection.
+If a hosted lobby response arrives after its Party session retires, that returned
+lobby is closed and left by its own ID instead of being adopted or leaving the
+replacement session. Cleanup failures are logged and returned to the caller.
+
+The six-second budget is not an end-to-end leave deadline: PlayFab lobby close and
+leave requests retain their separate request timeouts. Run the native-independent
+deadline, active-pump, reentrant-reset and stale-session checks with
+`dotnet run --project tools\NetRumble.PlatformSpike -c Release -- --playfab-checks-only`.
+The apphost's `--playfab-native-smoke` mode additionally exercises local native
+Party manager initialization, pumping and deadline cleanup without authentication
+or service writes; it does not prove connected play or console behavior.
+
 ## Peer trust
 
 The GDK provider accepts a "welcome" control packet only from the actual host entity,
