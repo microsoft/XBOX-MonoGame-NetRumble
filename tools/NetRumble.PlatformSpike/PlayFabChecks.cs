@@ -60,6 +60,7 @@ internal static class PlayFabChecks
         PartyRegionResetChecks(Check);
         await PartyAttemptCancellationChecks(Check);
         await PartyEarlyAuthenticationChecks(Check);
+        await PartyLateLobbyChecks(Check);
 
         Check("adult account creation remains allowed", PlatformAgeGroup.Adult.AllowsSilentAccountCreation());
         Check("child account creation remains forbidden", !PlatformAgeGroup.Child.AllowsSilentAccountCreation());
@@ -639,6 +640,48 @@ internal static class PlayFabChecks
         check("connection and authentication retain their own completion",
             ReferenceEquals(await connection.WaitAsync(TimeSpan.FromSeconds(2)), completedConnection)
             && ReferenceEquals(await authentication.WaitAsync(TimeSpan.FromSeconds(2)), completedAuthentication));
+    }
+
+    private static async Task PartyLateLobbyChecks(Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var type = typeof(GameCorePartyService);
+        var revision = (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!;
+        type.GetMethod("ResetSessionState", Flags)!.Invoke(party, null);
+        type.GetProperty(nameof(party.HasNetwork))!.SetValue(party, true);
+        type.GetProperty(nameof(party.JoinCode))!.SetValue(party, "NEWER");
+        type.GetField("_lobbyId", Flags)!.SetValue(party, "replacement-lobby");
+        var newWait = (Task)type.GetMethod("AwaitOperationAsync", Flags)!
+            .MakeGenericMethod(typeof(PartyOperationCompleted))
+            .Invoke(party, [default(PartyOperationId), CancellationToken.None])!;
+        var lobby = new PlayFabLobby
+        {
+            LobbyId = "late-lobby",
+            ConnectionString = "retired-network",
+            JoinCode = "OLDER",
+        };
+        var closedIds = new List<string>();
+        var adopt = type.GetMethod("AdoptHostedLobbyAsync", Flags)!;
+        var result = await (Task<PlatformResult<string>>)adopt.Invoke(party,
+            [lobby, revision, new Func<string, Task<PlatformResult>>(id =>
+            {
+                closedIds.Add(id);
+                return Task.FromResult(PlatformResult.Ok());
+            })])!;
+        check("late hosted lobby adoption returns cancellation", result.WasCanceled);
+        check("late hosted lobby cleanup closes only the returned lobby",
+            closedIds.SequenceEqual(["late-lobby"]));
+        check("late hosted lobby cleanup preserves replacement state",
+            party.HasNetwork && party.JoinCode == "NEWER" && !newWait.IsCompleted
+            && (string)type.GetField("_lobbyId", Flags)!.GetValue(party)! == "replacement-lobby");
+        var failure = await (Task<PlatformResult<string>>)adopt.Invoke(party,
+            [lobby, revision, new Func<string, Task<PlatformResult>>(_ =>
+                Task.FromResult(PlatformResult.Fail(PlatformStatus.NetworkFailure, "close failed", "close-diagnostics")))])!;
+        check("late hosted lobby cleanup surfaces close failures",
+            failure.Status == PlatformStatus.NetworkFailure && failure.Result.Diagnostics == "close-diagnostics");
+        check("failed late lobby cleanup still preserves the replacement",
+            party.HasNetwork && party.JoinCode == "NEWER" && !newWait.IsCompleted);
     }
 
     private static void NativeLobbyResetChecks(Action<string, bool> check)

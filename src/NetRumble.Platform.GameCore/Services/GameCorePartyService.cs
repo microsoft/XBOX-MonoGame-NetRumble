@@ -350,14 +350,8 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                     lobby.Result.Diagnostics);
             }
 
-            lock (_stateGate)
-            {
-                ThrowIfSessionEnded(revision);
-                _lobbyId = lobby.Value.LobbyId;
-                JoinCode = lobby.Value.JoinCode;
-                HasNetwork = true;
-                return PlatformResult<string>.Ok(JoinCode);
-            }
+            return await AdoptHostedLobbyAsync(lobby.Value, revision,
+                id => _online.Lobbies.CloseAndLeaveLobbyAsync(id)).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -969,6 +963,30 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         }
     }
 
+    private async Task<PlatformResult<string>> AdoptHostedLobbyAsync(
+        PlayFabLobby lobby, int revision, Func<string, Task<PlatformResult>> closeLobby)
+    {
+        lock (_stateGate)
+        {
+            if (IsSessionCurrent(revision))
+            {
+                _lobbyId = lobby.LobbyId;
+                JoinCode = lobby.JoinCode;
+                HasNetwork = true;
+                return PlatformResult<string>.Ok(JoinCode);
+            }
+        }
+
+        var closed = await closeLobby(lobby.LobbyId).ConfigureAwait(false);
+        if (closed.Failed)
+        {
+            CrashLog.Mark($"party: rejected lobby close failed: {closed}");
+            return PlatformResult<string>.Fail(closed.Status,
+                "The online match could not be closed.", closed.Diagnostics);
+        }
+        return PlatformResult<string>.Canceled();
+    }
+
     private async Task<PlatformResult> CancelAttemptAsync(int revision)
     {
         await LeaveAsync(revision).ConfigureAwait(false);
@@ -1067,9 +1085,13 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         return PlatformResult.Ok();
     }
 
+    private bool IsSessionCurrent(int revision)
+        => revision == _sessionRevision && !_disposed && !_disposeAfterPump && !_leaving
+            && _party is not null && _partyUser is not null;
+
     private void ThrowIfSessionEnded(int revision)
     {
-        if (revision != _sessionRevision || _disposed || _disposeAfterPump || _leaving || _party is null || _partyUser is null)
+        if (!IsSessionCurrent(revision))
         {
             throw new OperationCanceledException("The Party session ended.");
         }
