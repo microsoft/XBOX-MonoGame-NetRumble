@@ -9,7 +9,7 @@ in this folder.
 |---|---|
 | Windows 10 or 11 | The Microsoft GDK, PlayFab and PlayFab Party binaries are Windows only. |
 | .NET 9 SDK or later | The desktop game targets `net9.0-windows`. |
-| [XBOX GDK.NET](https://github.com/gaming-microsoft/gdk-dotnet), cloned beside this repository | A managed projection of the GDK, PlayFab and Party used by the GameCore provider. |
+| [XBOX GDK.NET](https://github.com/microsoft/XBOX-GDK-dotnet), cloned beside this repository as `gdk-dotnet` | A managed projection of the GDK, PlayFab and Party used by the GameCore provider. |
 | A Microsoft GDK edition | Required to run the game, including Practice. The source can still be built without the installed native runtime. |
 | An XBOX account with access to this sample's title and sandbox | GDK sign-in is required before entering the main menu. |
 
@@ -25,10 +25,9 @@ native Core, Services and Multiplayer libraries.
 The desktop build stages available native libraries from `GameDKCoreLatest`; console
 packaging stages the XBOX copies instead.
 
-The `gdk-dotnet` repository that holds XBOX GDK.NET is not public at the time of writing.
-Request access through the
-[XBOX Developer Program](https://developer.microsoft.com/en-us/games/) or your Microsoft
-representative.
+The XBOX GDK.NET source is available publicly in
+[`microsoft/XBOX-GDK-dotnet`](https://github.com/microsoft/XBOX-GDK-dotnet). Clone it into
+`gdk-dotnet` as shown below to match the solution's default project-reference paths.
 
 Targeting XBOX Series X|S needs more than the list above, and all of it is restricted to
 XBOX development partners. See [Building for XBOX Series X|S](xbox-console-build.md).
@@ -36,7 +35,7 @@ XBOX development partners. See [Building for XBOX Series X|S](xbox-console-build
 ## Build and run
 
 ```powershell
-git clone https://github.com/gaming-microsoft/gdk-dotnet.git
+git clone https://github.com/microsoft/XBOX-GDK-dotnet.git gdk-dotnet
 git clone --branch develop https://github.com/microsoft/XBOX-MonoGame-NetRumble.git
 cd XBOX-MonoGame-NetRumble
 dotnet build NetRumble.slnx /p:NoWarn=NU1603

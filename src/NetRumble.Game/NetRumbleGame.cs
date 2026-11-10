@@ -68,6 +68,11 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
     private readonly Random _random = new();
     private readonly UiInput _uiInput = new();
     private readonly ScreenManager _screens = new();
+#if GDKX
+    private int _loggedControllerConnections = -1;
+    private int _loggedControllerActivity;
+    private int _controllerConnectionReports;
+#endif
 
     private SpriteBatch? _spriteBatch;
     private Texture2D? _pixel;
@@ -377,6 +382,34 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
             (viewportHeight - (DesignHeight * RenderScale)) * 0.5f);
     }
 
+#if GDKX
+    private void TraceConsoleControllers()
+    {
+        var connected = 0;
+        var supported = GamePad.MaximumGamePadCount;
+        for (var slot = 0; slot < supported; slot++)
+        {
+            var state = GamePad.GetState(slot);
+            var bit = 1 << slot;
+            if (state.IsConnected)
+            {
+                connected |= bit;
+            }
+            if (state.Buttons.A == ButtonState.Pressed && (_loggedControllerActivity & bit) == 0)
+            {
+                _loggedControllerActivity |= bit;
+                CrashLog.Mark($"input: managed slot {slot} received A; sampled by UI={slot == 0}");
+            }
+        }
+        if (connected != _loggedControllerConnections && _controllerConnectionReports < 16)
+        {
+            _loggedControllerConnections = connected;
+            _controllerConnectionReports++;
+            CrashLog.Mark($"input: MonoGame connected mask=0x{connected:X}; supported={supported}; UI slot=0; platform={_bootState}");
+        }
+    }
+#endif
+
     protected override void Update(GameTime gameTime)
     {        // Before the platform pump and before any screen runs: continuations queued since
         // the last frame are the tail halves of work the game already started, so they
@@ -407,6 +440,9 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
         // with this frame's letterbox, not the one the previous Draw left behind.
         UpdateViewportMetrics();
 
+#if GDKX
+        TraceConsoleControllers();
+#endif
         _uiInput.Update(
             keyboard,
             GamePad.GetState(PlayerIndex.One),

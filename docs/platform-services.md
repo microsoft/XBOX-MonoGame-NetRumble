@@ -90,8 +90,12 @@ These checks also cover pump-delivered results, suspension cancellation and dire
 invalidation. The GDK owns synchronization outside the title process; the backend only
 acquires the per-user folder and performs file I/O.
 Run `dotnet run --project tools\NetRumble.GameSaveChecks -c Release` for the
-game-layer initial-load, first-run settings and stale-snapshot regressions. Neither suite
-requires native sign-in or initializes a graphics device.
+game-layer initial-load, first-run settings and stale-snapshot regressions. It also checks
+presence retries after failed results or exceptions, single-flight/latest-value
+coalescing, successful deduplication and account changes. A failed presence send waits
+for another event instead of immediately retrying forever, and a stale completion cannot
+suppress publication after re-sign-in. Neither suite requires native sign-in or
+initializes a graphics device.
 
 ### Why `IGameInputService` is a null implementation
 
