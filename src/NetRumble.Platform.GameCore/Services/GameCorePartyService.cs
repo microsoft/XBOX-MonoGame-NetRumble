@@ -982,7 +982,7 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
         int revision)
     {
         Task<PartyConnectToNetworkCompleted> connection;
-        PartyOperationId authenticate;
+        Task<PartyAuthenticateLocalUserCompleted> authentication;
         lock (_stateGate)
         {
             ThrowIfSessionEnded(revision);
@@ -990,9 +990,9 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 _party!.ConnectToNetwork(PartyNetworkDescriptor.Deserialize(descriptor));
             _network = network;
 
-            authenticate = network.AuthenticateLocalUser(
+            var authenticate = network.AuthenticateLocalUser(
                 _partyUser!, string.IsNullOrEmpty(invitation) ? null : invitation);
-            connection = AwaitOperationAsync<PartyConnectToNetworkCompleted>(connect, cancellationToken);
+            (connection, authentication) = AwaitConnectionOperations(connect, authenticate, cancellationToken);
         }
 
         var connected = await connection.ConfigureAwait(false);
@@ -1002,12 +1002,10 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
                 PlayerMessage("Could not connect to the online match.", connected.Result), Describe(connected));
         }
 
-        Task<PartyAuthenticateLocalUserCompleted> authentication;
         lock (_stateGate)
         {
             ThrowIfSessionEnded(revision);
             _network = connected.Network;
-            authentication = AwaitOperationAsync<PartyAuthenticateLocalUserCompleted>(authenticate, cancellationToken);
         }
         var authenticated = await authentication.ConfigureAwait(false);
         if (!authenticated.Succeeded)
@@ -1225,6 +1223,16 @@ internal sealed class GameCorePartyService : IPartyService, IDisposable
             var pending = new PendingRegions(cancellationToken);
             _pendingRegions.Add(pending);
             return pending.Completion.Task;
+        }
+    }
+
+    private (Task<PartyConnectToNetworkCompleted>, Task<PartyAuthenticateLocalUserCompleted>) AwaitConnectionOperations(
+        PartyOperationId connect, PartyOperationId authenticate, CancellationToken cancellationToken)
+    {
+        lock (_stateGate)
+        {
+            return (AwaitOperationAsync<PartyConnectToNetworkCompleted>(connect, cancellationToken),
+                AwaitOperationAsync<PartyAuthenticateLocalUserCompleted>(authenticate, cancellationToken));
         }
     }
 

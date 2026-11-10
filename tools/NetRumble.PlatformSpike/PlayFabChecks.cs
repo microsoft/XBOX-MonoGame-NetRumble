@@ -59,6 +59,7 @@ internal static class PlayFabChecks
         PartyReentrantResetChecks(Check);
         PartyRegionResetChecks(Check);
         await PartyAttemptCancellationChecks(Check);
+        await PartyEarlyAuthenticationChecks(Check);
 
         Check("adult account creation remains allowed", PlatformAgeGroup.Adult.AllowsSilentAccountCreation());
         Check("child account creation remains forbidden", !PlatformAgeGroup.Child.AllowsSilentAccountCreation());
@@ -610,6 +611,34 @@ internal static class PlayFabChecks
             && !newWait.IsCompleted
             && ReferenceEquals(type.GetField("_party", Flags)!.GetValue(party), replacement)
             && replacementRevision == (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!);
+    }
+
+    private static async Task PartyEarlyAuthenticationChecks(Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var type = typeof(GameCorePartyService);
+        PartyOperationId Operation(long id) => (PartyOperationId)Activator.CreateInstance(
+            typeof(PartyOperationId), Flags, null, [id], null)!;
+        var connectId = Operation(1);
+        var authenticateId = Operation(2);
+        var (connection, authentication) = ((Task<PartyConnectToNetworkCompleted>,
+            Task<PartyAuthenticateLocalUserCompleted>))type.GetMethod("AwaitConnectionOperations", Flags)!
+            .Invoke(party, [connectId, authenticateId, CancellationToken.None])!;
+        var pending = (System.Collections.IDictionary)type.GetField("_pendingOperations", Flags)!.GetValue(party)!;
+        check("connection and authentication waits register before pumping", pending.Count == 2);
+        var completedAuthentication = new PartyAuthenticateLocalUserCompleted(authenticateId,
+            PartyStateChangeResult.CanceledByTitle, 0, null, null, null);
+        var completedConnection = new PartyConnectToNetworkCompleted(connectId,
+            PartyStateChangeResult.CanceledByTitle, 0, default!, null);
+        var complete = type.GetMethod("CompleteOperation", Flags)!;
+        complete.Invoke(party, [completedAuthentication]);
+        complete.Invoke(party, [completedConnection]);
+        check("early authentication completion is retained before the connection await",
+            connection.IsCompletedSuccessfully && authentication.IsCompletedSuccessfully && pending.Count == 0);
+        check("connection and authentication retain their own completion",
+            ReferenceEquals(await connection.WaitAsync(TimeSpan.FromSeconds(2)), completedConnection)
+            && ReferenceEquals(await authentication.WaitAsync(TimeSpan.FromSeconds(2)), completedAuthentication));
     }
 
     private static void NativeLobbyResetChecks(Action<string, bool> check)

@@ -96,6 +96,9 @@ from tearing down a newer session.
 Host/join attempts retain their original revision through native continuations
 and failure/cancellation cleanup; an old attempt cannot adopt a replacement
 session's revision by starting a new parameterless leave.
+Connection and authentication completion waits are registered together before the
+pump can observe either result, so early authentication cannot be discarded while
+the caller is still waiting for the connection.
 
 The six-second budget is not an end-to-end leave deadline: PlayFab lobby close and
 leave requests retain their separate request timeouts. Run the native-independent
