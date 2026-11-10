@@ -63,8 +63,8 @@ documentation:
 
 ## Reporting a problem
 
-Read [Known gaps](docs/known-gaps.md) and [Troubleshooting](docs/troubleshooting.md) first.
-Between them they cover most of what is currently missing or environment specific.
+Check [Known gaps](docs/known-gaps.md) for platform limitations and
+[Troubleshooting](docs/troubleshooting.md) for symptoms and fixes.
 
 When you open an issue, include the provider mode you ran in, the exact command line, and
 the output of the platform spike if the problem touches sign-in, the transport or saving.

@@ -4,8 +4,7 @@ What every platform feature in the sample is built to do, and the environments i
 in. This table describes intended behaviour rather than a record of live test results.
 Service availability, title access and account policy still apply.
 
-[Known gaps](known-gaps.md) records which of these have been observed working and which
-have only ever compiled.
+[Known gaps](known-gaps.md) records selected unverified service and hardware paths.
 
 ## Platform feature matrix
 

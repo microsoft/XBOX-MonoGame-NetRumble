@@ -13,8 +13,8 @@ private account information into an issue or test report.
 
 For every case record **pass**, **fail**, or **untested**, plus the observable result and
 any relevant sanitized logs. Missing access, a second device or console hardware means
-**untested**, not pass. Use [Known gaps](known-gaps.md) for the current historical
-evidence; do not overwrite it with an assumption based on this plan.
+**untested**, not pass. See [Known gaps](known-gaps.md) for recorded unverified platform
+paths; do not treat an expected result as a pass.
 
 ## Environment tiers
 

@@ -140,7 +140,7 @@ types throughout gameplay code.
 | [Windows packaging](docs/windows-packaging.md) | You want an installable package |
 | [Building for XBOX Series X\|S](docs/xbox-console-build.md) | You are an XBOX development partner |
 | [Design notes](docs/design-notes.md) | You want the reasoning behind a decision |
-| [Known gaps](docs/known-gaps.md) | Something is missing and you want to know whether that is deliberate |
+| [Known gaps](docs/known-gaps.md) | You want to check platform limitations and unverified paths |
 | [Troubleshooting](docs/troubleshooting.md) | A build, install or sign-in step failed |
 | [Glossary](docs/glossary.md) | You are new to GDK, XBOX or PlayFab terminology |
 

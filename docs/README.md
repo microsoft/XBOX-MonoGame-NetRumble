@@ -37,7 +37,7 @@ For MonoGame itself, see the [MonoGame documentation](https://docs.monogame.net/
 | Page | Contents |
 |---|---|
 | [Design notes](design-notes.md) | Why the sample is shaped the way it is, plus the findings that cost real time |
-| [Known gaps](known-gaps.md) | What is missing, what has never been observed working, and what is missing on purpose |
+| [Known gaps](known-gaps.md) | Sample limitations and unverified service or hardware paths |
 | [Troubleshooting](troubleshooting.md) | Symptoms, causes and fixes |
 | [Vendored Party binaries](../third_party/party/README.md) | What is vendored under `third_party/party/`, and which target it is correct for |
 
