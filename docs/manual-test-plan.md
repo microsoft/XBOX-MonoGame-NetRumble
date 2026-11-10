@@ -36,6 +36,7 @@ XBOX privileges, PlayFab Lobby, Party or account-backed storage.
 | Local settings | GameCore | Change an option, exit, and restart with the same account. | The account's local setting is restored. |
 | XBOX and PlayFab sign-in | GameCore | Sign in with an authorized account, then attempt the host flow. | XBOX sign-in reaches the menu; hosting exercises the additional PlayFab identity rather than assuming it from the gamertag. Record each failure separately. |
 | Lobby and Party | GameCore | Host and join by code on two devices, ready both, and exchange gameplay traffic. | Both players reach the same match; no protocol mismatch or connection error occurs. |
+| PC host ready hotkey | GameCore on PC | Host a lobby, press **Space**, hold it briefly, release, then press again. Repeat with ship, colour and roster focus, and after dismissing a dialog. | The host's checkmark toggles once per press, not while held. Space readies rather than activating customization/roster actions. A solo online host stays in the lobby; another player is required to start. Dialog/code-entry submission does not also ready the underlying lobby. |
 | Cancel join-code entry | GameCore on PC/Console | Choose **Join Match**, then cancel the system keyboard. Repeat using **Cancel**, **Esc** on PC, and controller **B** on the game's code overlay, including after entering a valid code. | Each cancellation returns to the main menu without joining or leaving a connecting lobby behind. A later keyboard completion must not restart the join. Submitting a valid code with **OK**, **Enter**, or **A** still joins. |
 | Invalid or stale code | GameCore | Enter a malformed code, then try a code after its host has left. | The join is rejected or times out with a useful reason; a retry can be made. |
 | Host departure | GameCore | Join a host, then have the host leave. | The client is told the session ended rather than remaining in a usable-looking match. |
@@ -71,3 +72,16 @@ They do not prove real login, cloud roaming or connected play. The optional
 `--playfab-native-smoke` checks native startup and teardown
 when the prerequisites are installed; it does not authenticate. See
 [Run modes](run-modes.md#platform-spike) for the wider harness and its limitations.
+
+The join-flow checks also cover host/client ready-up through the real input dispatcher,
+roster state, Ready/Accept conflicts, controller X, keyboard T, and modal/text-entry
+isolation. For a separate Windows native-keyboard check:
+
+```powershell
+dotnet run --project tools\NetRumble.JoinFlowChecks -c Release --no-build -- --native-host-input-check
+```
+
+This opens a short-lived MonoGame/DX12 test window, posts Space only to its verified
+process-owned Windows handle, samples `Keyboard.GetState`, and checks the hosted lobby's
+readiness. Platform services remain controlled test doubles; this does not reproduce an
+account-backed Party session or prove the reported user-side ready-up symptom fixed.

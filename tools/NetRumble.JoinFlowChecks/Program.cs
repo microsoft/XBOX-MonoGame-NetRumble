@@ -2,6 +2,7 @@ using System.Reflection;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
+using NetRumble.Core;
 using NetRumble.Core.Net;
 using NetRumble.Core.Net.Wire;
 using NetRumble.Game;
@@ -11,6 +12,13 @@ using NetRumble.Game.UI.Elements;
 using NetRumble.Game.UI.Screens;
 using NetRumble.Game.UI.Widgets;
 using NetRumble.Platform;
+
+if (args.Contains("--native-host-input-check"))
+{
+    using var check = new NativeHostInputCheck();
+    check.Run();
+    return check.Passed ? 0 : 1;
+}
 
 var failures = 0;
 void Check(string label, Action<TestUi> test)
@@ -238,6 +246,109 @@ Check("removed code entry ignores a late result without popping the replacement 
     ui.AssertNoJoin();
 });
 
+Check("PC Space readies the connected lobby through screen dispatch", ui =>
+{
+    ui.AcceptInvite();
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(ui.Party.ReadyValues.SequenceEqual([true]), "Space did not publish ready=true.");
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(ui.Party.ReadyValues.Count == 1, "Held Space repeated ready.");
+    ui.Frame();
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(ui.Party.ReadyValues.SequenceEqual([true, false]), "Second Space did not unready.");
+});
+
+Check("PC Space readies a hosted lobby without starting a solo online match", ui =>
+{
+    ui.OpenHost();
+    var lobby = (LobbyScreen)ui.Screens.Current!;
+    var network = ui.LobbyNetwork;
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(network.LocalPlayer!.IsReady, "Hosted local player did not ready.");
+    var roster = (MenuList)typeof(LobbyScreen).GetField("_list",
+        BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(lobby)!;
+    var displayedPlayer = (PlayerState)typeof(RosterRow).GetField("_state",
+        BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(roster.Rows[0])!;
+    TestUi.Require(ReferenceEquals(displayedPlayer, network.LocalPlayer) && displayedPlayer.IsReady,
+        "Displayed host roster row did not reflect readiness.");
+    TestUi.Require(ReferenceEquals(ui.Screens.Current, lobby), "Solo host started without another player.");
+    ui.Frame();
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(!network.LocalPlayer!.IsReady, "Hosted local player did not unready.");
+});
+
+foreach (var zone in new[] { "ShipTabs", "ColorTabs", "Roster" })
+{
+    Check($"host Space takes priority over Accept with {zone} focus", ui =>
+    {
+        ui.OpenHost();
+        var lobby = ui.Screens.Current!;
+        var focus = typeof(LobbyScreen).GetField("_focusZone", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        focus.SetValue(lobby, Enum.Parse(focus.FieldType, zone));
+        if (zone == "Roster")
+        {
+            var list = (MenuList)typeof(LobbyScreen).GetField("_list",
+                BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(lobby)!;
+            var row = (RosterRow)list.Rows[0];
+            row.SetActionsContext(true, false);
+            list.FocusFirst();
+        }
+        var sent = ui.Party.SentTypes.Count;
+        ui.Frame(keys: new KeyboardState(Keys.Space));
+        TestUi.Require(ui.LobbyNetwork.LocalPlayer!.IsReady, "Space was consumed by the focused widget.");
+        TestUi.Require(ReferenceEquals(ui.Screens.Current, lobby), "Space activated a roster action.");
+        TestUi.Require(ui.Party.SentTypes.Skip(sent).All(type => type == MessageType.RosterSnapshot),
+            "Space activated customization instead of only readying.");
+    });
+}
+
+Check("host Space still readies when Enter is already held", ui =>
+{
+    ui.OpenHost();
+    ui.Frame(keys: new KeyboardState(Keys.Enter));
+    TestUi.Require(!ui.LobbyNetwork.LocalPlayer!.IsReady, "Enter must not ready.");
+    ui.Frame(keys: new KeyboardState(Keys.Enter, Keys.Space));
+    TestUi.Require(ui.LobbyNetwork.LocalPlayer!.IsReady, "Held Accept prevented the Ready edge.");
+});
+
+Check("controller X still readies and keyboard T still toggles lobby voice mute", ui =>
+{
+    ui.OpenHost();
+    ui.Frame(pad: new GamePadState(Vector2.Zero, Vector2.Zero, 0, 0, Buttons.X));
+    TestUi.Require(ui.LobbyNetwork.LocalPlayer!.IsReady, "Controller X did not ready.");
+    ui.Frame(keys: new KeyboardState(Keys.T));
+    TestUi.Require(ui.Party.IsSelfMuted, "Keyboard voice hotkey was lost.");
+});
+
+Check("Space dismissing a modal does not ready the host underneath", ui =>
+{
+    ui.OpenHost();
+    ui.Screens.ShowDialog("Test modal", "Space should accept this dialog, not ready the lobby.");
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(ui.Screens.Current is LobbyScreen, "Space no longer accepts dialogs.");
+    TestUi.Require(!ui.LobbyNetwork.LocalPlayer!.IsReady, "Modal dismissal leaked Space to the host.");
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(!ui.LobbyNetwork.LocalPlayer!.IsReady, "Held dismissal leaked on the next frame.");
+    ui.Frame();
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(ui.LobbyNetwork.LocalPlayer!.IsReady, "Fresh Space failed after modal dismissal.");
+});
+
+Check("Space submitting code entry does not also ready the resulting lobby", ui =>
+{
+    ui.OpenManualJoin();
+    ui.TextEntry.SetResult(PlatformResult<string>.Ok("ABCDE"));
+    ui.Frame();
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(ui.Party.Codes.SequenceEqual(["ABCDE"]), "Space no longer accepts code entry.");
+    TestUi.Require(!ui.LobbyNetwork.LocalPlayer!.IsReady, "Code submission leaked into ready-up.");
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(!ui.LobbyNetwork.LocalPlayer!.IsReady, "Held code submission readied on the next frame.");
+    ui.Frame();
+    ui.Frame(keys: new KeyboardState(Keys.Space));
+    TestUi.Require(ui.LobbyNetwork.LocalPlayer!.IsReady, "Fresh Space failed after code entry.");
+});
+
 Console.WriteLine($"{(failures == 0 ? "PASS" : "FAIL")}: {failures} failed join-flow checks.");
 return failures == 0 ? 0 : 1;
 
@@ -341,6 +452,16 @@ sealed class TestUi : IDisposable
 
     internal void AcceptInvite() => _inviteAccepted!("test-invite");
 
+    internal void OpenHost()
+    {
+        Party.Hosting = true;
+        Screens.Push(new LobbyScreen(LobbyIntent.Host));
+        Require(Screens.Current is LobbyScreen { IsOnline: true }, "Host did not connect.");
+    }
+
+    internal IMatchNetwork LobbyNetwork => (IMatchNetwork)typeof(LobbyScreen).GetField("_network",
+        BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(Screens.Current)!;
+
     internal void Frame(KeyboardState keys = default, GamePadState pad = default, MouseState mouse = default)
     {
         Context.Input.Update(keys, pad, mouse, 1f / 60f);
@@ -381,14 +502,17 @@ public class Stub<T> : DispatchProxy where T : class
 
 sealed class TestParty : IPartyService
 {
+    internal List<bool> ReadyValues { get; } = [];
+    internal List<MessageType> SentTypes { get; } = [];
     internal List<string> Codes { get; } = [];
     internal List<string> Invites { get; } = [];
     internal int Leaves { get; private set; }
     internal PlatformResult JoinResult { get; set; } = PlatformResult.Ok();
     internal Task<PlatformResult>? PendingJoin { get; set; }
     public bool HasNetwork => true;
-    public bool IsHost => false;
-    public int LocalPeerId => 2;
+    internal bool Hosting { get; set; }
+    public bool IsHost => Hosting;
+    public int LocalPeerId => Hosting ? 1 : 2;
     public string ConnectionString => "test-invite";
     public string JoinCode => "ABCDE";
     public bool ChatAllowed { get; set; }
@@ -400,7 +524,7 @@ sealed class TestParty : IPartyService
     public event Action? ChatChanged { add { } remove { } }
     public event Action<int, string, ChatTextKind>? ChatTextReceived { add { } remove { } }
     public Task<PlatformResult<string>> HostAsync(int maxPlayers, string gameMode, string protocolVersion,
-        CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        CancellationToken cancellationToken = default) => Task.FromResult(PlatformResult<string>.Ok("ABCDE"));
     public Task<PlatformResult> JoinAsync(string joinCode, string protocolVersion,
         CancellationToken cancellationToken = default)
     {
@@ -419,7 +543,16 @@ sealed class TestParty : IPartyService
         using var refusal = new MessageWriter(MessageType.JoinRefused, 4);
         MessageReceived?.Invoke(IPartyService.HostPeerId, refusal.Written);
     }
-    public void Send(int peerId, ReadOnlySpan<byte> payload, MessageDelivery delivery) { }
+    public void Send(int peerId, ReadOnlySpan<byte> payload, MessageDelivery delivery)
+    {
+        var reader = new MessageReader(payload);
+        if (!reader.TryReadMessageType(out var type)) { throw new InvalidOperationException("Missing packet type."); }
+        SentTypes.Add(type);
+        if (type == MessageType.SubmitReady && reader.TryReadBool(out var ready))
+        {
+            ReadyValues.Add(ready);
+        }
+    }
     public void SetPeerRestrictions(int peerId, bool allowVoice, bool allowText) { }
     public void SetPeerMuted(int peerId, bool muted) { }
     public bool IsPeerMuted(int peerId) => false;
