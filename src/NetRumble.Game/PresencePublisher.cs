@@ -56,9 +56,11 @@ public sealed class PresencePublisher
     private string _wanted = string.Empty;
     private string? _publishedAccount;
     private bool _inFlight;
+    private long _revision;
+    private long _accountGeneration;
 
     /// <summary>
-    /// The last id handed to the platform, so a presence call only goes out when the
+    /// The last id successfully published, so a presence call only goes out when the
     /// state actually changes. Screens push and pop constantly - every dialog, every
     /// options visit - and each publish is a service round trip, so re-sending the id
     /// already in effect would be pure traffic.
@@ -91,12 +93,14 @@ public sealed class PresencePublisher
         lock (_gate)
         {
             var account = _context.Platform.Identity.CurrentUser?.LocalId;
-            if (account is null)
+            if (account != _wantedAccount)
             {
                 _publishedAccount = null;
+                _accountGeneration++;
             }
             _wantedAccount = account;
             _wanted = Resolve();
+            _revision++;
         }
         Kick();
     }
@@ -104,6 +108,9 @@ public sealed class PresencePublisher
     private void Kick()
     {
         string id;
+        string account;
+        long revision;
+        long accountGeneration;
         lock (_gate)
         {
             if (_inFlight || _wantedAccount is null
@@ -112,17 +119,25 @@ public sealed class PresencePublisher
                 return;
             }
             _inFlight = true;
-            _publishedAccount = _wantedAccount;
-            _published = id = _wanted;
+            account = _wantedAccount;
+            id = _wanted;
+            revision = _revision;
+            accountGeneration = _accountGeneration;
         }
-        _ = SendAsync(id);
+        _ = SendAsync(account, id, revision, accountGeneration);
     }
 
-    private async Task SendAsync(string id)
+    private async Task SendAsync(string account, string id, long revision, long accountGeneration)
     {
+        var succeeded = false;
         try
         {
-            await _context.Platform.Activity.SetPresenceAsync(id).ConfigureAwait(false);
+            var result = await _context.Platform.Activity.SetPresenceAsync(id).ConfigureAwait(false);
+            succeeded = result.Succeeded;
+            if (result.Failed)
+            {
+                CrashLog.Mark($"presence: publication failed ({result}).");
+            }
         }
         catch (Exception ex)
         {
@@ -130,11 +145,19 @@ public sealed class PresencePublisher
         }
         finally
         {
+            bool sendLatest;
             lock (_gate)
             {
+                if (accountGeneration == _accountGeneration)
+                {
+                    _publishedAccount = succeeded ? account : null;
+                    if (succeeded) { _published = id; }
+                }
                 _inFlight = false;
+                // A failed send waits for another event, unless one arrived in flight.
+                sendLatest = succeeded || revision != _revision;
             }
-            Kick();
+            if (sendLatest) { Kick(); }
         }
     }
 

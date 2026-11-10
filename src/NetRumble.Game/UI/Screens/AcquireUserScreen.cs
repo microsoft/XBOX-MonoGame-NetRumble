@@ -3,6 +3,7 @@ using Microsoft.Xna.Framework.Graphics;
 using Microsoft.Xna.Framework.Input;
 using NetRumble.Game.Fx;
 using NetRumble.Platform;
+using NetRumble.Platform.Diagnostics;
 
 namespace NetRumble.Game.UI.Screens;
 
@@ -324,6 +325,9 @@ public sealed class AcquireUserScreen : MenuScreen
             return;
         }
 
+#if GDKX
+        CrashLog.Mark("input: acquire-user waiting for continue input");
+#endif
         _stage = Stage.WaitingForInput;
         _status = "Press any key to continue";
         _detail = string.Empty;
@@ -342,6 +346,9 @@ public sealed class AcquireUserScreen : MenuScreen
             return;
         }
 
+#if GDKX
+        CrashLog.Mark("input: acquire-user accepted continue; beginning sign-in");
+#endif
         _signingIn = true;
         _stage = Stage.SigningIn;
         _stalled = false;

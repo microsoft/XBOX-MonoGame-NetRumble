@@ -60,6 +60,18 @@ with `-Package`, packages.
 `dotnet build` cannot build `.vcxproj` files at all, failing with `MSB4278`, so the
 XBOX Series X|S flow shells out to the Visual Studio copy of MSBuild.
 
+### Match the managed and native MonoGame ABI
+
+The managed framework and console backend must agree on native entry points and
+signatures. The bootstrap build runs `tools\NetRumble.NativeImportChecks` against the
+managed framework used by AOT and the staged `mgruntime.dll`. Missing exact named
+exports fail the build before packaging; successful linking or package validation
+alone does not catch this mismatch. The check reads PE metadata without executing
+console code and does not prove parameter or structure-layout compatibility.
+
+Use matching managed and console sources, not export aliases or no-op compatibility
+entry points, and repeat console play testing after a toolchain change.
+
 ## How the pieces fit
 
 The XBOX Series X|S OS does not host CoreCLR, so there is no managed executable with a
@@ -146,5 +158,15 @@ Both `dotnet build` calls in `tools\Build-Gdkx.ps1` pass `/p:NoWarn=NU1603`. See
 ## Toolchain patches
 
 The external repositories this build depends on pin `PlatformToolset` to `v143`, which is
-Visual Studio 2022. The scripts pass `-PlatformToolset v145` instead. Nothing is patched in
-place, so those checkouts stay clean and can be pulled.
+Visual Studio 2022. The scripts pass `-PlatformToolset v145` instead of editing those
+project files.
+
+The bootstrap build applies `tools\patches\monogame-xbox-input.patch` to the MonoGame
+console backend before compiling it. Use an isolated dependency checkout: this patch
+changes its working tree. An already-applied patch is recognized; incompatible sources
+fail the build rather than silently skipping the fix.
+
+The patch treats a controller read as connected only when it succeeds, avoiding phantom
+controllers on other error results. Bounded native and managed diagnostics trace input
+initialization, slot discovery, the first button input and the acquire-user handoff.
+These diagnostics are console-only and do not replace testing with a real controller.

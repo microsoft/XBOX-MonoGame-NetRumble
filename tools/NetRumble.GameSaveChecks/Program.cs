@@ -9,6 +9,8 @@ void Check(string label, bool passed)
     if (!passed) { failures++; }
 }
 
+await PresenceChecks.RunAsync(Check);
+
 var root = Path.Combine(Path.GetTempPath(), $"netrumble-game-saves-{Guid.NewGuid():N}");
 try
 {

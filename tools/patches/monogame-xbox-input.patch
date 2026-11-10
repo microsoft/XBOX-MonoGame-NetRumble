@@ -1,0 +1,80 @@
+diff --git a/native/monogame/MGP_xbox.cpp b/native/monogame/MGP_xbox.cpp
+index 3d06bdd..234f828 100644
+--- a/native/monogame/MGP_xbox.cpp
++++ b/native/monogame/MGP_xbox.cpp
+@@ -43,6 +43,7 @@ void MGXA_Resume();
+ 
+ struct XB_GamepadState
+ {
++    DWORD status = ERROR_DEVICE_NOT_CONNECTED;
+     bool connected = false;
+     float lx = 0.0f, ly = 0.0f;
+     float rx = 0.0f, ry = 0.0f;
+@@ -70,6 +71,8 @@ struct MGP_Platform
+ 	std::vector<MGP_Window*> windows;
+     std::queue<MGP_Event> queued_events;
+     std::vector<XB_GamepadState> gamepad_state;
++    unsigned int gamepad_status_log_count[XB_MAX_GAMEPADS] = {};
++    uint32_t gamepad_activity_logged = 0;
+     IGameInput* game_input = nullptr;
+     GameInputKeyState sim_key_state[XB_MAX_SIM_KEYS];
+     std::bitset<256> key_state;
+@@ -163,7 +166,11 @@ MGP_Platform* MGP_Platform_Create(MGGameRunBehavior& behavior)
+     platform->gamepad_state.resize(XB_MAX_GAMEPADS);
+ 
+     // Create game input for keyboard and mouse
+-    GameInputCreate(&platform->game_input);
++    auto inputResult = GameInputCreate(&platform->game_input);
++    char inputMessage[128];
++    sprintf_s(inputMessage, sizeof(inputMessage),
++        "[NetRumble input] native GameInputCreate: 0x%08X\n", static_cast<unsigned int>(inputResult));
++    OutputDebugStringA(inputMessage);
+ 
+     // Capture our start tick for event timestamps.
+     platform->start_tick = GetTickCount64();
+@@ -340,7 +347,8 @@ static void MGXB_PollController(int index, XB_GamepadState* out_state)
+     XINPUT_STATE state { 0, { 0, 0, 0, 0, 0, 0, 0 } };
+     DWORD status = XInputGetState(index, &state);
+ 
+-    out_state->connected = status != ERROR_DEVICE_NOT_CONNECTED;
++    out_state->status = status;
++    out_state->connected = status == ERROR_SUCCESS;
+ 
+     out_state->buttons |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_UP) ? ToButtonFlag(MGControllerInput::DpadUp) : 0;
+     out_state->buttons |= (state.Gamepad.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) ? ToButtonFlag(MGControllerInput::DpadDown) : 0;
+@@ -409,9 +417,30 @@ void MGXB_UpdateGamepadState(MGP_Platform* platform, mglong timestamp)
+         // Generate events.
+         XB_GamepadState& last_state = platform->gamepad_state[i];
+ 
++        if (platform->gamepad_status_log_count[i] < 8 &&
++            (platform->gamepad_status_log_count[i] == 0 || state.status != last_state.status))
++        {
++            platform->gamepad_status_log_count[i]++;
++            char message[128];
++            sprintf_s(message, sizeof(message),
++                "[NetRumble input] native slot %d: XInputGetState=%lu\n", i, state.status);
++            OutputDebugStringA(message);
++        }
++        if (state.connected && state.buttons != 0 && (platform->gamepad_activity_logged & (1U << i)) == 0)
++        {
++            platform->gamepad_activity_logged |= 1U << i;
++            char message[128];
++            sprintf_s(message, sizeof(message),
++                "[NetRumble input] native slot %d: first buttons=0x%08X\n", i, state.buttons);
++            OutputDebugStringA(message);
++        }
++
+         // If the controller was and is disconnected we can skip the rest.
+         if (!state.connected && !last_state.connected)
++        {
++            last_state = state;
+             continue;
++        }
+ 
+         // Process connections first.
+         if (state.connected && !last_state.connected)
+@@ -993,4 +1022,3 @@ mgbyte MGP_GamePad_SetVibration(MGP_Platform* platform, mgint identifer, mgfloat
+ 
+     return result == ERROR_SUCCESS;
+ }
+-
