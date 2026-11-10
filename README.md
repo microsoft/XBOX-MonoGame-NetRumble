@@ -29,7 +29,7 @@ sign-in, privileges, privacy, Party networking and cloud saves through the sampl
 exercise the available paths with the required accounts and service access.
 
 The game is written in C# against **MonoGame 3.8.5** and reaches the platform through
-[XBOX GDK.NET](https://github.com/gaming-microsoft/gdk-dotnet), a managed projection of
+[XBOX GDK.NET](https://github.com/microsoft/XBOX-GDK-dotnet), a managed projection of
 the GDK, PlayFab and Party, behind a single `IPlatformProvider` boundary. The game sources
 build for CoreCLR on the desktop and for XBOX Series X|S; limited conditional compilation
 handles platform-specific startup and UI. That boundary is the most reusable part of the
@@ -38,7 +38,7 @@ sample. See [Platform abstraction](docs/platform-abstraction.md).
 > [!IMPORTANT]
 > **This is a source-only sample rather than a shipping game.** NetRumble is MIT licensed
 > at the game layer. The Microsoft GDK, PlayFab, Party and
-> [XBOX GDK.NET](https://github.com/gaming-microsoft/gdk-dotnet) dependencies require
+> [XBOX GDK.NET](https://github.com/microsoft/XBOX-GDK-dotnet) dependencies require
 > their own installs and license acceptance, consistent with other XBOX samples.
 >
 > There is no fixed update cadence for support or maintenance. We watch the repository,
@@ -49,18 +49,21 @@ sample. See [Platform abstraction](docs/platform-abstraction.md).
 
 ## Quickstart
 
-You need Windows, the .NET 9 SDK or later, and access to the private
-[XBOX GDK.NET](https://github.com/gaming-microsoft/gdk-dotnet) source repository.
+You need Windows, the .NET 9 SDK or later, and the public
+[XBOX GDK.NET](https://github.com/microsoft/XBOX-GDK-dotnet) source checkout.
 Running the game also needs the Microsoft GDK and an authorized XBOX account for the
 configured title and sandbox. This includes Practice; there is no guest mode.
 
 ```powershell
-git clone https://github.com/gaming-microsoft/gdk-dotnet.git
+git clone https://github.com/microsoft/XBOX-GDK-dotnet.git gdk-dotnet
 git clone --branch develop https://github.com/microsoft/XBOX-MonoGame-NetRumble.git
 cd XBOX-MonoGame-NetRumble
 dotnet build NetRumble.slnx /p:NoWarn=NU1603
 dotnet run --project src\NetRumble.Game --no-build
 ```
+
+Clone XBOX GDK.NET into `gdk-dotnet` as shown so the solution's default project references
+resolve without a `GdkNetRoot` override.
 
 `/p:NoWarn=NU1603` is required and has to be passed as a global property. See
 [Restore fails with NU1603](docs/troubleshooting.md#restore-fails-with-nu1603).
