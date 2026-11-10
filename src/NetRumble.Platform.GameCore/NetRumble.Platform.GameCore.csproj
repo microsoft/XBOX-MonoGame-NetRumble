@@ -37,7 +37,7 @@
     protecting our NativeAOT console build.
   -->
   <PropertyGroup>
-    <GdkNetRoot Condition="'$(GdkNetRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\gdk-dotnet\</GdkNetRoot>
+    <GdkNetRoot Condition="'$(GdkNetRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\gdk-dotnet\</GdkNetRoot>
     <GdkNetProject>$(GdkNetRoot)src\GDK.Net\GDK.Net.csproj</GdkNetProject>
   </PropertyGroup>
 

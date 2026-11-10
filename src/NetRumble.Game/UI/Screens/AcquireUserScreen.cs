@@ -126,10 +126,8 @@ public sealed class AcquireUserScreen : MenuScreen
             return;
         }
 
-        // Being pushed on top of an existing stack (the main menu's "Sign In" row) is
-        // itself the player choosing to sign in, so this skips the idle prompt and goes
-        // straight to the picker; only a first-run boot with nothing behind it waits
-        // for a press.
+        // A re-push is itself the player choosing to sign in, so skip the idle prompt.
+        // The simplified user model asks the system for its default user, not a picker.
         if (Manager.StackSize > 1)
         {
             BeginSignIn(context);

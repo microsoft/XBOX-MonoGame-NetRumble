@@ -6,6 +6,18 @@ to NetRumble specifically.
 
 ## Build and restore
 
+### GDK.NET project cannot be found
+
+**Symptom.** The build reports that `GDK.Net.csproj` was not found or that the
+`gdk-dotnet` checkout is missing.
+
+**Cause.** The solution uses a source `ProjectReference`, not a public NuGet package.
+The default path expects a `gdk-dotnet` directory beside this repository.
+
+**Fix.** Clone the dependency into that sibling location, or set `GdkNetRoot` to its
+absolute directory with a trailing backslash. Access to the private dependency is
+separate from installing the GDK. See [Configuration](configuration.md#source-checkout-and-build).
+
 ### Restore fails with NU1603
 
 **Symptom.** `dotnet build` fails during restore with `NU1603`, reported as an error rather
@@ -108,7 +120,46 @@ Gaming Runtime is not supported.
 `libHttpClient.dll` beside the executable (plus the SDK's HTTP dependencies).
 The GameCore project stages the installed desktop redistributables; console packaging
 uses the Xbox GDK copies instead. Pump Lobby state changes every frame while awaiting
-lobby operations. There is no hand-written HTTP fallback, including in developer modes.
+lobby operations. There is no hand-written HTTP fallback.
+
+### The game will not pass the sign-in screen
+
+**Symptom.** The acquire-user screen reports a missing runtime or default user, and
+Practice is unavailable.
+
+**Cause.** This branch always uses the GDK provider and requires XBOX sign-in, even for
+local Practice. It uses the simplified user model rather than a title-driven account picker.
+
+**Fix.** Check the installed GDK, the sample title and sandbox, and the authorized system
+account. On a loose-deployed PC build, the system may launch its sign-in bootstrapper and
+relaunch the title. Retry after the system has established a default user. See
+[Configuration](configuration.md#user-model).
+
+### The gamertag appears but hosting fails
+
+**Symptom.** XBOX sign-in reaches the menu, but Lobby or Party cannot start.
+
+**Cause.** The XBOX user and the PlayFab entity are separate identities. PlayFab login can
+fail without undoing XBOX sign-in, and a local capability flag does not prove service
+access.
+
+**Fix.** Check the configured PlayFab title, its relationship to the XBOX title, sandbox
+access and sanitized logs. Check connectivity and multiplayer privilege as well. A
+transient PlayFab sign-in failure can be retried on a later Host or Join attempt. See
+the [sign-in walkthrough](walkthroughs.md#sign-in-to-xbox-and-playfab).
+
+### Settings do not roam to a second device
+
+**Symptom.** A setting persists locally but does not appear on another device for the
+same account.
+
+**Cause.** A local save and an account-backed XGameSaveFiles round trip are separate.
+The save folder also depends on the title's XBOX service configuration ID (SCID).
+
+**Fix.** Confirm the account, title and SCID on both devices, allow the platform to
+synchronize, and inspect sanitized save diagnostics. The sample's settings push is
+best-effort and does not display a success confirmation. Treat roaming as untested until
+the second device receives the expected value. Match history is local only.
 
 ### Settings do not persist in a packaged build
 

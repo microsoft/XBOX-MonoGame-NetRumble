@@ -68,5 +68,4 @@ If the install times out with `0x800705b4`, see
 ## Before you submit anything
 
 The controller glyphs and store logos in this repository are placeholders. Replace both
-with real assets before taking any part of this sample into a submission. See
-[Known gaps](known-gaps.md#configuration-and-assets).
+with real assets before taking any part of this sample into a submission.

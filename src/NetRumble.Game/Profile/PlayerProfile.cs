@@ -22,14 +22,14 @@ public enum TranscriptionMode
 /// </summary>
 /// <remarks>
 /// <para>
-/// Settings live in an INI-shaped file under local app data, keeping the section and key
-/// names Godot's <c>ConfigFile</c> used so a file written by either port stays readable by
-/// the other.
+/// Settings live in an INI-shaped file under local app data, using the section and key
+/// names from Godot's <c>ConfigFile</c>. Sharing files between ports needs separate
+/// compatibility verification.
 /// </para>
 /// <para>
-/// The cloud payload from <see cref="ToDictionary"/> deliberately still uses the
-/// <c>SettingKeyToString()</c> names from the C++ sample, so PlayFab Game Saves remain
-/// interchangeable across all three implementations.
+/// The cloud payload from <see cref="ToDictionary"/> uses the C++ sample's
+/// <c>SettingKeyToString()</c> names. This build stores that payload through
+/// XGameSaveFiles; matching field names alone do not prove cross-title interoperability.
 /// </para>
 /// </remarks>
 public sealed class PlayerProfile

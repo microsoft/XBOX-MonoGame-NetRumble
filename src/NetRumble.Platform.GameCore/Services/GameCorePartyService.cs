@@ -28,10 +28,9 @@ namespace NetRumble.Platform.GameCore.Services;
 /// complete on the runtime thread pool.
 /// </para>
 /// <para>
-/// This cannot be exercised end-to-end in this checkout because there is no installed
-/// GDK, Xbox account or real PlayFab title id. The implementation follows the verified
-/// <c>GDK.Net.MultiplayerHarness</c> sequence and records every remaining uncertainty in
-/// <c>docs/design-notes.md</c> rather than claiming live service validation.
+/// The native PlayFab migration still needs an authenticated two-device pass. Earlier
+/// console invite results do not prove this newer authentication and Lobby path; see
+/// <c>docs/known-gaps.md</c>.
 /// </para>
 /// </remarks>
 internal sealed class GameCorePartyService : IPartyService, IDisposable

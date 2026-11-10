@@ -8,8 +8,8 @@
 > portions of the GDK, a development kit, and documentation that Microsoft distributes only
 > to organisations onboarded as XBOX development partners under a GDK Agreement.
 >
-> If you do not have that access, everything in this repository still builds and runs on
-> Windows. See [Getting started](getting-started.md).
+> Without console-partner access, you can still build for Windows. Running the game also
+> requires the GDK and an authorized XBOX account. See [Getting started](getting-started.md).
 >
 > To begin onboarding, visit the
 > [XBOX Developer Program](https://developer.microsoft.com/en-us/games/). Partners can
@@ -31,15 +31,14 @@ the partner documentation, which is the authoritative source and stays current.
 | Target framework | `net9.0-windows` | `net8.0` |
 | MonoGame | 3.8.5 from NuGet | 3.8.5 built from source with the console backend |
 | Runtime | CoreCLR with JIT | NativeAOT, linked into a native host |
-| Build | `dotnet build NetRumble.slnx` | `tools\Build-Gdkx.ps1` |
+| Build | `dotnet build NetRumble.slnx /p:NoWarn=NU1603` | `tools\Build-Gdkx.ps1` |
 | Package | `tools\Build-GdkPc.ps1 -Package` | `tools\Build-Gdkx.ps1 -Package` |
 | Game config | `packaging\MicrosoftGame.PC.config` | `packaging\MicrosoftGame.GDKX.*.config` |
 
-**The game sources are shared verbatim and contain no `#if GDKX`.** As of MonoGame 3.8.5
-the desktop and XBOX Series X|S backends present the same managed API surface, so game code
-does not have to know which target it is compiling for. A `GDKX` constant is defined for
-the XBOX Series X|S build, but nothing uses it, and it should stay that way. A `#if` in
-game code is a signal that something belongs behind the platform abstraction instead. See
+The projects share the game sources. Most gameplay and platform-service calls use the same
+managed surface on both targets; the existing `GDKX` conditionals cover a few
+target-specific entry-point, storage, diagnostics and UI details. Keep new platform
+service differences behind the provider boundary where practical. See
 [Platform abstraction](platform-abstraction.md).
 
 ## Prerequisites
@@ -77,8 +76,8 @@ about what the game code needs.
 
 ## Why the XBOX Series X|S project is not in NetRumble.slnx
 
-`dotnet build NetRumble.slnx` is the one command that builds and tests everything else,
-and it must not require a GDK install, a development kit or the console toolchain.
+`dotnet build NetRumble.slnx` builds the desktop solution without requiring an installed
+GDK, a development kit or the console toolchain. Running the checks is a separate step.
 `src/NetRumble.Game.GDKX` needs all three plus content the desktop build has already
 produced, so adding it to the solution would turn a missing optional toolchain into a hard
 failure for everyone.

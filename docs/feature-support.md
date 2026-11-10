@@ -4,8 +4,7 @@ What every platform feature in the sample is built to do, and the environments i
 in. This table describes intended behaviour rather than a record of live test results.
 Service availability, title access and account policy still apply.
 
-[Known gaps](known-gaps.md) records which of these have been observed working and which
-have only ever compiled.
+[Known gaps](known-gaps.md) records selected unverified service and hardware paths.
 
 ## Platform feature matrix
 
@@ -19,7 +18,7 @@ have only ever compiled.
 | XBOX achievement reporting | Yes | Yes |
 | Rich presence | Yes | Yes |
 | Roaming cloud save for settings and achievement stats | Connected storage (`XGameSaveFiles`) | Connected storage (`XGameSaveFiles`) |
-| Match history and counters | Local, per user | Local, per user |
+| Match history | Local, per user | Local, per user |
 | Connectivity gating before online play is offered | Platform hint when known | Platform hint when known |
 | Lifecycle and controller detection | Focus and device detection | Suspend, resume, constrain, association detection |
 
@@ -38,8 +37,8 @@ sample favours a low-latency demonstration over a queue that has to fill.
 
 ## Cloud save
 
-The GDK provider saves to GDK connected storage (`XGameSaveFiles`), so settings, achievement
-stats and match history roam together and the platform resolves conflicts.
+The GDK provider saves settings and achievement stats through GDK connected storage
+(`XGameSaveFiles`). Match history uses local storage only and does not roam.
 GDK.Net's `GameSaveFiles.GetFolderWithUiAsync` acquires the per-user folder before the
 first file operation. Each save is a file named by its key directly in that directory.
 Writes use temporary files and atomic replacement; account changes invalidate queued work.
@@ -47,8 +46,9 @@ The GDK handles save synchronization outside the title process. The title only a
 the correct user's directory and reads or writes files; it has no synchronization
 callbacks, reconciliation barriers or connectivity retry queue. Account changes,
 suspension and resume invalidate the cached directory. The next file operation
-reacquires it before accessing files. Public cloud-operation completions are delivered
-through the runtime pump.
+reacquires it before accessing files. With the runtime initialized, cloud-operation
+results are queued through the runtime pump; a runtime-unavailable result can return
+immediately.
 
 Cloud save has not been round-tripped between two devices. See
 [Known gaps](known-gaps.md#never-observed-end-to-end).

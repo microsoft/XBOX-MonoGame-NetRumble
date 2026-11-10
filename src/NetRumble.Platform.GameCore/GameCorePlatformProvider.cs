@@ -11,13 +11,14 @@ namespace NetRumble.Platform.GameCore;
 /// <remarks>
 /// <para>
 /// Runtime, identity and online services are GDK-backed. <see cref="Capabilities"/>
-/// reports only the services whose native dependencies are available.
+/// reports locally available service paths, not account permission or a proven live
+/// service round trip.
 /// </para>
 /// <para>
-/// <b>Replacing this provider.</b> A standalone C# GDK would replace this class and the
-/// whole <c>Interop</c> folder, and nothing else in the solution. The contract it must
-/// keep is in <see cref="IPlatformRuntime"/>: every task it hands out and every event it
-/// raises must surface on the thread that calls <see cref="IPlatformRuntime.Pump"/>.
+/// <b>Replacing this provider.</b> Keep native details behind
+/// <see cref="IPlatformProvider"/> and its service interfaces. Follow the threading and
+/// lifecycle guidance in <see cref="IPlatformRuntime"/> rather than assuming every
+/// callback or task continuation runs inside <see cref="IPlatformRuntime.Pump"/>.
 /// </para>
 /// </remarks>
 public sealed class GameCorePlatformProvider : IPlatformProvider
@@ -59,9 +60,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         var activity = new GameCoreActivityService(_runtime, identity, _xbl);
         Activity = activity;
 
-        // Pumped from GameCoreRuntime.Pump rather than called directly from here - see
-        // GameCoreActivityService's own remarks on why activation callbacks must land on
-        // the same thread every other provider event does.
+        // Pumped from GameCoreRuntime.Pump so activation callbacks reach the game thread.
         _runtime.Activity = activity;
         _runtime.Party = (GameCorePartyService)Party;
         _runtime.Online = _online;

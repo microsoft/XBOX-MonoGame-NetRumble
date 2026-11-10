@@ -10,9 +10,8 @@ namespace NetRumble.Platform.Composition;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>This is the file you edit to swap P/Invoke for a standalone C# GDK.</b> Add a
-/// case to <see cref="Create"/>, and nothing else in the solution changes. Game,
-/// gameplay, UI and netcode code only ever see <see cref="IPlatformProvider"/>.
+/// This composition root selects the provider; game, gameplay, UI and netcode consume
+/// <see cref="IPlatformProvider"/> instead of constructing native services themselves.
 /// </para>
 /// <para>
 /// It is also the only assembly that references the concrete providers. Keeping it

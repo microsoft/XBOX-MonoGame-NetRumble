@@ -3,36 +3,54 @@
 Every service behind `IPlatformProvider`, where it is implemented, and how far it has been
 proven. Use this page to find the file you want to read.
 
-The source is the detailed documentation. Each file listed below carries XML comments that
-explain the decisions behind it.
+Use the [walkthroughs](walkthroughs.md) for player actions, expected results and failure
+cases. The source files below explain ownership and ordering in more detail.
 
 ## Where each integration lives
 
 | Integration | Source |
 |---|---|
-| GDK sign-in and the exchange for a PlayFab identity | `src/NetRumble.Platform.GameCore/Services/GameCoreIdentityService.cs`, `src/NetRumble.Platform.PlayFab/PlayFabOnlineServices.cs` |
-| Required sign-in and progress screen | `src/NetRumble.Game/UI/Screens/AcquireUserScreen.cs` |
-| PlayFab Party as the match transport | `src/NetRumble.Platform.GameCore/Services/GameCorePartyService.cs`, `src/NetRumble.Core/Net/PartyMatchNetwork.cs` |
-| Join-code discovery with PlayFab Lobby | `src/NetRumble.Platform.PlayFab/PlayFabLobbyClient.cs` |
-| Multiplayer and communications privilege checks | `src/NetRumble.Platform.GameCore/Services/GameCorePrivilegeService.cs` |
-| Per-player mute, block and avoid enforcement | `src/NetRumble.Platform.GameCore/Services/GameCorePrivacyService.cs` |
-| Text verification before player-authored content is shown | `src/NetRumble.Platform.GameCore/Services/GameCoreModerationService.cs` |
-| Party voice and speech-to-text captions | `src/NetRumble.Platform.GameCore/Services/GameCorePartyService.cs`, `src/NetRumble.Game/UI/Elements/SttOverlay.cs` |
-| One-shot and incremental achievement progress | `src/NetRumble.Platform.GameCore/Services/GameCoreAchievementService.cs`, `src/NetRumble.Game/Profile/AchievementTracker.cs` |
-| Local and cloud save for settings and achievement stats | `src/NetRumble.Platform.GameCore/Services/LocalFileGameSaveService.cs`, `src/NetRumble.Platform.GameCore/Services/GameCoreGameSaveService.cs`, `src/NetRumble.Game/Profile/CloudSettingsSync.cs` |
-| Suspend, resume, constrain and account-change handling | `src/NetRumble.Game/LifecycleCoordinator.cs`, `src/NetRumble.Platform.GameCore/Interop/PlmInterop.cs` |
-| Activity publishing, presence and join-from-guide invites | `src/NetRumble.Platform.GameCore/Services/GameCoreActivityService.cs`, `src/NetRumble.Game/PresencePublisher.cs`, `src/NetRumble.Game/InviteRouter.cs` |
-| Connectivity detection before online play is offered | `src/NetRumble.Platform/Runtime/IPlatformRuntime.cs`, `src/NetRumble.Game/UI/Screens/MainMenuScreen.cs` |
-| Controller association and loss | `src/NetRumble.Game/ControllerWatcher.cs`, `src/NetRumble.Game/UI/ControllerDisconnectOverlay.cs` |
-| The system keyboard and other platform UI | `src/NetRumble.Platform.GameCore/Services/GameCorePlatformUiService.cs`, `src/NetRumble.Game/UI/Elements/SystemKeyboard.cs` |
-| Build-version refusal and the peer trust boundary | `src/NetRumble.Platform/Networking/NRProtocol.cs`, `src/NetRumble.Core/Net/Wire/MessageReader.cs` |
-| Marshalling async completions onto the frame-pumped thread | `src/NetRumble.Platform.GameCore/Services/PumpDispatcher.cs` |
+| GDK sign-in and the exchange for a PlayFab identity | [`GameCoreIdentityService`](../src/NetRumble.Platform.GameCore/Services/GameCoreIdentityService.cs), [`PlayFabOnlineServices`](../src/NetRumble.Platform.PlayFab/PlayFabOnlineServices.cs) |
+| Required sign-in and progress screen | [`AcquireUserScreen`](../src/NetRumble.Game/UI/Screens/AcquireUserScreen.cs) |
+| PlayFab Party as the match transport | [`GameCorePartyService`](../src/NetRumble.Platform.GameCore/Services/GameCorePartyService.cs), [`PartyMatchNetwork`](../src/NetRumble.Core/Net/PartyMatchNetwork.cs) |
+| Join-code discovery with PlayFab Lobby | [`PlayFabLobbyClient`](../src/NetRumble.Platform.PlayFab/PlayFabLobbyClient.cs) |
+| Multiplayer and communications privilege checks | [`GameCorePrivilegeService`](../src/NetRumble.Platform.GameCore/Services/GameCorePrivilegeService.cs) |
+| Per-player mute, block and avoid enforcement | [`GameCorePrivacyService`](../src/NetRumble.Platform.GameCore/Services/GameCorePrivacyService.cs) |
+| Text verification before player-authored content is shown | [`GameCoreModerationService`](../src/NetRumble.Platform.GameCore/Services/GameCoreModerationService.cs) |
+| Party voice and speech-to-text captions | [`GameCorePartyService`](../src/NetRumble.Platform.GameCore/Services/GameCorePartyService.cs), [`SttOverlay`](../src/NetRumble.Game/UI/Elements/SttOverlay.cs) |
+| One-shot and incremental achievement progress | [`GameCoreAchievementService`](../src/NetRumble.Platform.GameCore/Services/GameCoreAchievementService.cs), [`AchievementTracker`](../src/NetRumble.Game/Profile/AchievementTracker.cs) |
+| Local and cloud save for settings and achievement stats | [`LocalFileGameSaveService`](../src/NetRumble.Platform.GameCore/Services/LocalFileGameSaveService.cs), [`GameCoreGameSaveService`](../src/NetRumble.Platform.GameCore/Services/GameCoreGameSaveService.cs), [`CloudSettingsSync`](../src/NetRumble.Game/Profile/CloudSettingsSync.cs) |
+| Local match history | [`MatchHistoryStore`](../src/NetRumble.Game/Profile/MatchHistoryStore.cs) |
+| Suspend, resume, constrain and account-change handling | [`LifecycleCoordinator`](../src/NetRumble.Game/LifecycleCoordinator.cs), [`PlmInterop`](../src/NetRumble.Platform.GameCore/Interop/PlmInterop.cs) |
+| Activity publishing, presence and join-from-guide invites | [`GameCoreActivityService`](../src/NetRumble.Platform.GameCore/Services/GameCoreActivityService.cs), [`PresencePublisher`](../src/NetRumble.Game/PresencePublisher.cs), [`InviteRouter`](../src/NetRumble.Game/InviteRouter.cs) |
+| Connectivity detection before online play is offered | [`IPlatformRuntime`](../src/NetRumble.Platform/Runtime/IPlatformRuntime.cs), [`MainMenuScreen`](../src/NetRumble.Game/UI/Screens/MainMenuScreen.cs) |
+| Controller association and loss | [`ControllerWatcher`](../src/NetRumble.Game/ControllerWatcher.cs), [`ControllerDisconnectOverlay`](../src/NetRumble.Game/UI/ControllerDisconnectOverlay.cs) |
+| The system keyboard and other platform UI | [`GameCorePlatformUiService`](../src/NetRumble.Platform.GameCore/Services/GameCorePlatformUiService.cs), [`SystemKeyboard`](../src/NetRumble.Game/UI/Elements/SystemKeyboard.cs) |
+| Build-version refusal and the peer trust boundary | [`NRProtocol`](../src/NetRumble.Platform/Networking/NRProtocol.cs), [`MessageReader`](../src/NetRumble.Core/Net/Wire/MessageReader.cs) |
+| Dispatching selected async completions to the frame pump | [`PumpDispatcher`](../src/NetRumble.Platform.GameCore/Services/PumpDispatcher.cs) |
+
+## Follow sign-in
+
+The acquire-user screen waits for runtime initialization, then asks
+`GameCoreIdentityService` for the system's default XBOX user. After acquiring it, the
+identity service asks `GameCoreOnlineSession` to exchange that user for a PlayFab entity.
+This excerpt from `PlayFabOnlineServices.SignInWithXboxUserAsync` shows the GDK.NET
+calls, not the surrounding ownership and error handling:
+
+```csharp
+var localUser = PlayFabLocalUser.CreateForXboxUser(config, user);
+var login = await localUser.LoginAsync(createAccount, token).ConfigureAwait(false);
+```
+
+Account creation is allowed only for an eligible age group. A failed PlayFab exchange
+does not undo a successful XBOX sign-in, so the presence of a gamertag is not proof of
+a usable Lobby/Party identity. See the [sign-in walkthrough](walkthroughs.md#sign-in-to-xbox-and-playfab).
 
 ## Implementation status
 
-The title uses the **simplified user model** on PC and Xbox. All four package
+The title uses the **simplified user model** on PC and XBOX. All four package
 configurations set `AdvancedUserModel` to `false`; GDK identity acquisition uses only
-`XUserAddOptions.AddDefaultUserSilently`. The system supplies one default user for the
+`UserAddOptions.AddDefaultUserSilently`. The system supplies one default user for the
 process lifetime and owns sign-in and user-change relaunches. The title has no account
 picker, in-session account switching, or activity-cache reset on account replacement.
 Profile refresh, reauthentication, privilege changes and sign-out lifecycle notifications
@@ -53,17 +71,17 @@ been proven by anyone without access to that title and its sandbox.
 | Service | GDK provider | Proven |
 |---|---|---|
 | `IPlatformRuntime` | Complete. Lifecycle events bound directly because XBOX GDK.NET wraps none of them. Device kind and a connectivity hint are read from the runtime. | Connectivity hint observed answering. Lifecycle callbacks need XBOX Series X\|S hardware. |
-| `IIdentityService` | XBOX sign-in complete. Account changes surface through `AccountChanged`, controller associations through `TracksControllerAssociations`, `HasAssociatedController` and `ControllerAssociationChanged`. One native PlayFab login supplies the entity for Party and Lobby. | Xbox sign-in previously proven; the native PlayFab migration needs authenticated console verification. Account-change and association events need XBOX Series X\|S hardware. |
+| `IIdentityService` | XBOX sign-in complete. Account changes surface through `AccountChanged`, controller associations through `TracksControllerAssociations`, `HasAssociatedController` and `ControllerAssociationChanged`. One native PlayFab login supplies the entity for Party and Lobby. | XBOX sign-in previously proven; the native PlayFab migration needs authenticated console verification. Account-change and association events need XBOX Series X\|S hardware. |
 | `IGameSaveService` | GDK.Net `GameSaveFiles.GetFolderWithUiAsync` and file I/O (`XGameSaveFiles`), independent of PlayFab configuration | Cached-folder file operations and account isolation checked locally. Cross-device roaming remains unverified. |
 | `IPrivilegeService` | Complete for the two privileges this title gates on, multiplayer and communications | Needs a signed-in account |
 | `IAchievementService` | Complete | No unlock round trip has been observed |
-| `IActivityService` | Activation, multiplayer activity and presence are wired and driven from the game | Join and invite flows proven between two XBOX Series X\|S consoles. Presence has not been seen on a real profile. |
+| `IActivityService` | Activation, multiplayer activity and presence are wired and driven from the game | Earlier console invite tests predate the native PlayFab migration. Presence and the current end-to-end invite path need a live pass. |
 | `IPrivacyService` | Complete, using per-target permission checks rather than the batch API | Needs a signed-in account |
 | `IModerationService` | Complete | Needs a signed-in account |
 | `ISocialService` | Complete. It re-queries rather than tracking a live group, so it raises no change event. | Needs a signed-in account |
 | `IGameInputService` | A null implementation. It reports no devices and raises no events; MonoGame reads input. | Not applicable |
 | `IPlatformUiService` | Complete | Interactive calls unverified end to end |
-| `IPartyService` | Party networking, Lobby join-code publishing, messaging and chat are wired | Join and invite flows proven between two XBOX Series X\|S consoles. |
+| `IPartyService` | Party networking, Lobby join-code publishing, messaging and chat are wired | Earlier console join and invite tests predate the native PlayFab migration; the current path needs an authenticated two-device pass. |
 
 Run the native-independent save-file checks with
 `dotnet run --project tools\NetRumble.PlatformSpike -- --gamesave-files-checks-only`.
