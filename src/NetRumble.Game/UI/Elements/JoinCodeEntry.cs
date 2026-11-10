@@ -27,8 +27,8 @@ namespace NetRumble.Game.UI.Elements;
 /// <para>
 /// The GDScript's cancel path had no callback at all - <c>NRJoinCodeEntry</c> simply
 /// <c>queue_free()</c>'d itself, because no caller in the original ever needed to know
-/// a join code entry was abandoned. That is preserved: <see cref="JoinCodeEntry"/> only
-/// ever calls back on success.
+/// a join code entry was abandoned. Here the lobby owns connection setup, so a separate
+/// cancellation callback lets it abandon that setup without submitting a code.
 /// </para>
 /// </remarks>
 public sealed class JoinCodeEntry : Screen
@@ -41,6 +41,7 @@ public sealed class JoinCodeEntry : Screen
 
     private readonly string _title;
     private readonly Action<string> _onSubmitted;
+    private readonly Action? _onCanceled;
     private readonly MenuList _buttons = new();
     private readonly SystemKeyboard _keyboard = new();
 
@@ -51,10 +52,11 @@ public sealed class JoinCodeEntry : Screen
     private Task<string?>? _platformRequest;
     private bool _closed;
 
-    public JoinCodeEntry(string title, Action<string> onSubmitted)
+    public JoinCodeEntry(string title, Action<string> onSubmitted, Action? onCanceled = null)
     {
         _title = title;
         _onSubmitted = onSubmitted;
+        _onCanceled = onCanceled;
 
         IsPopup = true;
 
@@ -97,18 +99,25 @@ public sealed class JoinCodeEntry : Screen
 
     public override void Update(UiContext context)
     {
+        if (_closed)
+        {
+            return;
+        }
+
         if (_platformRequest is { IsCompleted: true } task)
         {
             _platformRequest = null;
             var typed = task.Result;
 
-            // A null result is a cancel or a failure, not a value to apply - the
-            // GDScript's `if text != null:` guard did the same, leaving whatever the
-            // field held (here, nothing) rather than clearing it a second time.
-            if (typed is not null)
+            // The GDK keyboard also owns text entry on PC. Dismissing it abandons
+            // entry, rather than exposing an empty overlay over a connecting lobby.
+            if (typed is null)
             {
-                SetText(typed.ToUpperInvariant());
+                Cancel();
+                return;
             }
+
+            SetText(typed.ToUpperInvariant());
 
             // Reopening the platform keyboard from the field itself (the GDScript's
             // `_on_line_edit_gui_input`) has no MonoGame equivalent worth the ceremony:
@@ -128,6 +137,11 @@ public sealed class JoinCodeEntry : Screen
 
     public override bool HandleAction(UiContext context, MenuAction action)
     {
+        if (_closed)
+        {
+            return true;
+        }
+
         if (action == MenuAction.Back)
         {
             Cancel();
@@ -137,7 +151,11 @@ public sealed class JoinCodeEntry : Screen
         return _buttons.HandleAction(context, action);
     }
 
-    public override void Exit() => _keyboard.EndDesktopEntry();
+    public override void Exit()
+    {
+        _closed = true;
+        _keyboard.EndDesktopEntry();
+    }
 
     public override void Draw(UiContext context)
     {
@@ -214,7 +232,7 @@ public sealed class JoinCodeEntry : Screen
         Close(() => _onSubmitted(_text));
     }
 
-    private void Cancel() => Close(null);
+    private void Cancel() => Close(_onCanceled);
 
     /// <summary>
     /// Pops before invoking <paramref name="onClosed"/>, for the same reason

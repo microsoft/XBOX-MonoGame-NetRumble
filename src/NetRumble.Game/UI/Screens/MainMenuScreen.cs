@@ -123,7 +123,7 @@ public sealed class MainMenuScreen : Screen
     /// rather than after that round trip (XR-045), exactly as the source's
     /// <c>_multiplayer_denial</c> check did before <c>NetManager.host_match</c>.
     /// </summary>
-    private static async void OnHostSelected(UiContext context)
+    private async void OnHostSelected(UiContext context)
     {
         var denial = await MultiplayerDenialAsync(context);
 
@@ -141,7 +141,7 @@ public sealed class MainMenuScreen : Screen
         context.Screens.Push(new LobbyScreen(LobbyIntent.Host));
     }
 
-    private static async void OnJoinSelected(UiContext context)
+    private async void OnJoinSelected(UiContext context)
     {
         var denial = await MultiplayerDenialAsync(context);
 
@@ -191,7 +191,7 @@ public sealed class MainMenuScreen : Screen
     /// <c>async</c> continuation here would happily push a screen on top of whatever
     /// the player navigated to in the meantime.
     /// </summary>
-    private static bool IsStillOnTop(UiContext context) => context.Screens.Current is MainMenuScreen;
+    private bool IsStillOnTop(UiContext context) => ReferenceEquals(context.Screens.Current, this);
 
     /// <summary>
     /// Party and matchmaking both require a signed-in user, so a denial is a dead end

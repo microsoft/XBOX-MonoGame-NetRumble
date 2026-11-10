@@ -36,9 +36,11 @@ XBOX privileges, PlayFab Lobby, Party or account-backed storage.
 | Local settings | GameCore | Change an option, exit, and restart with the same account. | The account's local setting is restored. |
 | XBOX and PlayFab sign-in | GameCore | Sign in with an authorized account, then attempt the host flow. | XBOX sign-in reaches the menu; hosting exercises the additional PlayFab identity rather than assuming it from the gamertag. Record each failure separately. |
 | Lobby and Party | GameCore | Host and join by code on two devices, ready both, and exchange gameplay traffic. | Both players reach the same match; no protocol mismatch or connection error occurs. |
+| Cancel join-code entry | GameCore on PC/Console | Choose **Join Match**, then cancel the system keyboard. Repeat using **Cancel**, **Esc** on PC, and controller **B** on the game's code overlay, including after entering a valid code. | Each cancellation returns to the main menu without joining or leaving a connecting lobby behind. A later keyboard completion must not restart the join. Submitting a valid code with **OK**, **Enter**, or **A** still joins. |
 | Invalid or stale code | GameCore | Enter a malformed code, then try a code after its host has left. | The join is rejected or times out with a useful reason; a retry can be made. |
 | Host departure | GameCore | Join a host, then have the host leave. | The client is told the session ended rather than remaining in a usable-looking match. |
 | Invites | GameCore | Accept an invite while the title is running and from a cold launch. | The receiver joins after sign-in/front-end readiness, or receives an actionable refusal. |
+| Failed invite / match in progress | GameCore | Accept a stale invite or join a match that has already started. Repeat while an earlier manual Join privilege check is pending. Acknowledge the refusal. | The main menu remains visible, not join-code entry. An older asynchronous join continuation must not reopen code entry or replace a newer attempt. |
 | Communications policy | GameCore | Try voice and text with permitted accounts; repeat with a communication or per-player restriction and self-mute. | Allowed communication works when supported; restricted or muted communication is suppressed according to the policy. |
 | Achievement | GameCore | Trigger a configured achievement using a test account and inspect its XBOX service state. | The appropriate progress or unlock is visible on the service, not just in local counters. |
 | Cloud roaming | GameCore | Change a setting on one device, allow the platform to synchronize, then sign in on a second device with the same account. | The second device receives the expected setting. A local file or a best-effort push alone is not evidence of roaming. |
@@ -58,10 +60,14 @@ dotnet run --project tools\NetRumble.PlatformSpike -c Release --no-build -- --id
 dotnet run --project tools\NetRumble.PlatformSpike -c Release --no-build -- --gamesave-files-checks-only
 dotnet run --project tools\NetRumble.PlatformSpike -c Release --no-build -- --playfab-checks-only
 dotnet run --project tools\NetRumble.GameSaveChecks -c Release --no-build
+dotnet run --project tools\NetRumble.JoinFlowChecks -c Release --no-build
 ```
 
 They exercise the simplified user model, temporary-folder save behavior, game-layer save
-logic and PlayFab adapter behavior. They do not prove real login, cloud roaming or
-connected play. The optional `--playfab-native-smoke` checks native startup and teardown
+logic, join-flow navigation and PlayFab adapter behavior. The join-flow checks use the
+real screen stack and input routing with controlled platform completions, including a
+host's `JoinRefused` packet; they do not open native UI or contact live services.
+They do not prove real login, cloud roaming or connected play. The optional
+`--playfab-native-smoke` checks native startup and teardown
 when the prerequisites are installed; it does not authenticate. See
 [Run modes](run-modes.md#platform-spike) for the wider harness and its limitations.
