@@ -3,36 +3,23 @@ using System.Collections.Concurrent;
 namespace NetRumble.Platform.GameCore.Services;
 
 /// <summary>
-/// Moves GDK.Net completions and events onto the thread that calls
+/// Queues selected GDK.Net task completions and callbacks for
 /// <see cref="GameCoreRuntime.Pump"/>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Why this exists.</b> <c>docs/platform-abstraction.md</c> promises that every task
-/// this provider hands out, and every event it raises, surfaces on the pump thread. That
-/// is what lets game code touch shared state from a completion handler without a lock,
-/// and it is the reason the provider interfaces are safe to consume from
-/// <c>NetRumbleGame.Update</c>.
+/// <b>Why this exists.</b> GDK.Net can complete operations on a thread-pool thread.
+/// GameCore uses this queue when a completion or callback must be processed during the
+/// game's frame pump.
 /// </para>
 /// <para>
-/// The old P/Invoke layer kept that promise by owning the GDK task queue: it created one
-/// in <c>XTaskQueueDispatchMode::Manual</c> and drained it from <c>Pump</c>, so
-/// completions could only ever run there. GDK.Net does not offer that. Its
-/// <c>GameTaskQueue</c> is deliberately <c>internal</c>, and
-/// <c>GameRuntime.Initialize</c> names no queue at all, so the Gaming Runtime resolves
-/// the process default - a thread-pool queue - and continuations arrive on the thread
-/// pool. GDK.Net documents this and expects a title that must touch its renderer to
-/// marshal to its own thread, which is exactly what this class does.
+/// <see cref="Marshal{T}(Task{T})"/> completes its mirror task during a drain, but its
+/// continuations run asynchronously and follow the caller's synchronization context or
+/// scheduler. The non-generic wrapper can itself finish on a thread-pool thread. Do not
+/// assume every provider task or callback goes through this dispatcher.
 /// </para>
 /// <para>
-/// So the contract is now kept one level up, at this provider's own boundary rather than
-/// at the GDK's: GDK.Net's <see cref="Task"/> may complete anywhere, but the task
-/// <em>we</em> return completes on the pump. The observable behaviour is unchanged; only
-/// the mechanism moved.
-/// </para>
-/// <para>
-/// <b>Cost.</b> A completion is delayed by at most one frame. That was already true of
-/// the manual queue, which also only ran during <c>Pump</c>.
+/// Queued work waits until a future pump, which may be later if pumping is paused.
 /// </para>
 /// </remarks>
 internal sealed class PumpDispatcher
@@ -50,10 +37,8 @@ internal sealed class PumpDispatcher
     /// pump thread.
     /// </summary>
     /// <remarks>
-    /// Cancellation is deliberately not re-observed here. <paramref name="source"/>
-    /// already carries the caller's token, and faulting or cancelling the mirror early
-    /// would let the continuation run off the pump - the one thing this type exists to
-    /// prevent.
+    /// Cancellation is taken from <paramref name="source"/> so the mirror preserves the
+    /// source result and dispatch ordering.
     /// </remarks>
     internal Task<T> Marshal<T>(Task<T> source)
     {
@@ -74,7 +59,10 @@ internal sealed class PumpDispatcher
         return completion.Task;
     }
 
-    /// <inheritdoc cref="Marshal{T}(Task{T})"/>
+    /// <summary>
+    /// Transfers completion through the dispatcher; this wrapper may finish on a
+    /// thread-pool thread after its internal await.
+    /// </summary>
     internal async Task Marshal(Task source)
     {
         // Adapting to the generic form keeps one implementation of the completion

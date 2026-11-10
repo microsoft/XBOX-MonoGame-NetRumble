@@ -7,7 +7,7 @@ namespace NetRumble.Platform.GameCore.Services;
 
 /// <summary>
 /// GDK-backed runtime: <c>XGameRuntimeInitialize</c>, through GDK.Net, plus the per-frame
-/// drain that keeps this provider's callbacks single-threaded.
+/// drain for queued work and multiplayer state changes.
 /// </summary>
 internal sealed class GameCoreRuntime : IPlatformRuntime
 {
@@ -88,15 +88,12 @@ internal sealed class GameCoreRuntime : IPlatformRuntime
     public event Action<PlatformResult>? RuntimeError;
 
     /// <summary>
-    /// Raised from <see cref="Pump"/> when the OS suspends, resumes, constrains or
-    /// unconstrains the title.
+    /// Raised when the OS suspends, resumes, constrains or unconstrains the title.
     /// </summary>
     /// <remarks>
-    /// The GDK delivers these on an OS thread, so <see cref="RegisterLifecycle"/> posts
-    /// them through <see cref="Dispatcher"/> rather than raising them inline. That keeps
-    /// the provider's promise that every event the game sees surfaces on the pump thread
-    /// - which matters more here than elsewhere, because the handlers touch the screen
-    /// stack, the audio device and the match simulation.
+    /// The GDK delivers these on an OS thread. <see cref="RegisterLifecycle"/> posts
+    /// resume and constrain changes through <see cref="Dispatcher"/>, but raises suspend
+    /// inline because the process may freeze before another frame.
     /// </remarks>
     public event Action<PlatformLifecycleEvent>? LifecycleChanged;
 
@@ -107,9 +104,9 @@ internal sealed class GameCoreRuntime : IPlatformRuntime
     internal GameRuntime? Runtime => GameRuntimeHost.Current;
 
     /// <summary>
-    /// Marshals GDK.Net's thread-pool completions onto the pump, shared with every other
-    /// service in this provider. See <see cref="PumpDispatcher"/> for why the provider
-    /// rather than the GDK now owns that guarantee.
+    /// Queues selected callbacks and task completions for the pump. See
+    /// <see cref="PumpDispatcher"/> for the distinction between completing a task and
+    /// where its continuations run.
     /// </summary>
     internal PumpDispatcher Dispatcher { get; } = new();
 
@@ -117,17 +114,14 @@ internal sealed class GameCoreRuntime : IPlatformRuntime
     /// The activity/activation service, set once by <see cref="GameCorePlatformProvider"/>
     /// after construction. Pumped here rather than given its own per-frame hook because
     /// <see cref="Pump"/> is the single call <c>NetRumbleGame.Update</c> makes every
-    /// frame. See the "Completions land on the pump thread" invariant in
-    /// <c>docs/platform-abstraction.md</c>, which this keeps for activation callbacks too.
+    /// frame. Activation callbacks are queued until this pump runs.
     /// </summary>
     internal GameCoreActivityService? Activity { get; set; }
 
     /// <summary>
     /// The Party networking service, set by the provider after construction and drained
-    /// from this same frame hook. Party's own async model is a state-change pump rather
-    /// than GDK.Net <see cref="Task"/> completions, but the observable contract is the
-    /// same as for <see cref="Dispatcher"/>: tasks and events become visible only from
-    /// <see cref="Pump"/>.
+    /// from this same frame hook. Party state changes are processed by
+    /// <see cref="Pump"/>; callers must not assume their task continuations run there.
     /// </summary>
     internal GameCorePartyService? Party { get; set; }
 
@@ -235,8 +229,8 @@ internal sealed class GameCoreRuntime : IPlatformRuntime
     /// </para>
     /// <para>
     /// Seeded silently: whatever the machine reports now is the baseline, and there is
-    /// nothing to announce about a state the player is already in. Changes go through
-    /// the dispatcher like everything else, so the game sees them on the pump thread.
+    /// nothing to announce about a state the player is already in. Later connectivity
+    /// changes go through the dispatcher, so the game sees them on the pump thread.
     /// </para>
     /// <para>
     /// Failure is not an error, for the same reason it is not for PLM. A build with no
@@ -300,9 +294,7 @@ internal sealed class GameCoreRuntime : IPlatformRuntime
     }
 
     /// <summary>
-    /// Runs the completions GDK.Net finished since the last frame. Every <c>Task</c>
-    /// handed out by this provider resolves inside this call, which is what keeps game
-    /// code single-threaded.
+    /// Drains queued work and processes Lobby, activity and Party state changes.
     /// </summary>
     public void Pump()
     {

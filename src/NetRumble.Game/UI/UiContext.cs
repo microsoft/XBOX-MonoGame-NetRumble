@@ -55,7 +55,7 @@ public sealed class UiContext
     /// </summary>
     public required AchievementTracker Achievements { get; init; }
 
-    /// <summary>The cloud tier for settings, over PlayFab Game Save.</summary>
+    /// <summary>The cloud tier for settings, backed by XGameSaveFiles.</summary>
     public required CloudSettingsSync CloudSettings { get; init; }
 
     /// <summary>Finished matches, for the Extras screen's Match History view.</summary>

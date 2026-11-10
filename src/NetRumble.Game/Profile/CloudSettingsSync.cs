@@ -10,24 +10,22 @@ namespace NetRumble.Game.Profile;
 /// <remarks>
 /// <para>
 /// <b>The local tier is not this class's job.</b> <see cref="PlayerProfile"/> already
-/// owns an INI file under local app data, keeping Godot's <c>ConfigFile</c> section and
-/// key names so either port can read the other's settings. That file stays the local
-/// tier, loaded for the account once sign-in completes. This class adds the second
-/// tier on top and nothing else.
+/// owns an INI file under local app data, using Godot's <c>ConfigFile</c> section and
+/// key names. That file stays the local tier, loaded for the account once sign-in
+/// completes. This class adds the second tier on top.
 /// </para>
 /// <para>
 /// <b>Why the payload is <see cref="PlayerProfile.ToDictionary"/> and not the INI.</b>
-/// The dictionary uses the C++ sample's <c>SettingKeyToString()</c> names, so a cloud
-/// record written here is interchangeable with the C++ and Godot builds' - which is the
-/// entire point of putting settings in the cloud for a title that ships on three
-/// engines. The INI's Godot-shaped names are a local-file detail.
+/// The dictionary uses the C++ sample's <c>SettingKeyToString()</c> names. The INI's
+/// Godot-shaped names are a local-file detail; compatible names alone do not establish
+/// that another build uses the same storage or account configuration.
 /// </para>
 /// </remarks>
 public sealed class CloudSettingsSync
 {
     /// <summary>
-    /// The cloud-save key. Matches the C++ sample's save name, so the three builds share
-    /// one record rather than each writing its own.
+    /// The cloud-save key, matching the C++ sample's save name. The key alone does not
+    /// establish that the builds use the same storage or account configuration.
     /// </summary>
     public const string SaveKey = "settings";
 
@@ -47,8 +45,8 @@ public sealed class CloudSettingsSync
     /// <remarks>
     /// Cloud wins on sign-in. The alternative - merging, or preferring the newer of the
     /// two - needs a timestamp this payload does not carry and a conflict UI the source
-    /// never had; taking the cloud copy is what makes signing in on a second console
-    /// bring your settings with you, which is the only reason this tier exists.
+    /// never had. Applying the cloud copy supports roaming, but a second-device round
+    /// trip must be verified separately.
     /// An absent record is a successful false. Failed reads and malformed records are
     /// explicit failures rather than an absent settings record.
     /// </remarks>
@@ -93,8 +91,8 @@ public sealed class CloudSettingsSync
     }
 
     /// <summary>
-    /// Fire-and-forget push. Called by <see cref="PlayerProfile.Save"/>, so every place
-    /// that already commits settings to disk commits them to the cloud too.
+    /// Fire-and-forget push. Called by <see cref="PlayerProfile.Save"/> after attempting
+    /// the local settings write; cloud writes are best-effort.
     /// </summary>
     public void Push() => _ = PushAsync();
 

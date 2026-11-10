@@ -9,9 +9,9 @@ namespace NetRumble.Platform.GameCore.Services;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Ported from <c>scripts/services/identity_service.gd</c>. The PlayFab exchange
-/// (<c>sign_in_with_xuser_async</c>) lands in Phase 5 once the PlayFab interop is in;
-/// this class currently produces the Xbox half of <see cref="PlatformUser"/>.
+/// Acquires the system's default Xbox user, then asks
+/// <see cref="GameCoreOnlineSession"/> for a PlayFab identity. A failed PlayFab login
+/// does not undo Xbox sign-in; online services must handle an empty entity id.
 /// </para>
 /// <para>
 /// <b>User ownership.</b> The GDK.Net <see cref="User"/> never leaves this class. Other
@@ -315,7 +315,7 @@ internal sealed class GameCoreIdentityService : IIdentityService
     /// </summary>
     /// <remarks>
     /// <para>
-    /// <b>Not marshalled onto the pump</b>, unlike every other callback in this provider.
+    /// These account-change callbacks are not marshalled onto the pump.
     /// <see cref="UserChangeEvent.SigningOut"/> is the title's last guaranteed moment -
     /// the platform terminates a title whose user has signed out - so anything posted to
     /// run on a later frame runs on a frame that may never arrive. This is the same

@@ -28,12 +28,9 @@ namespace NetRumble.Platform.GameCore.Services;
 /// so a title may call this freely without tracking what it last sent.
 /// </para>
 /// <para>
-/// <b>Unverifiable in this environment.</b> Every call needs a signed-in Xbox user and a
-/// live Xbox Services connection, neither of which exists on this development machine.
-/// This class was verified to build and to fail cleanly through
-/// <see cref="XblRuntimeProbe"/>/<see cref="GameCoreXblContext"/> when there is no
-/// context, but a real unlock round trip could not be observed - see
-/// <c>docs/design-notes.md</c>.
+/// A real unlock round trip has not been observed. It needs a signed-in Xbox user, a
+/// correctly configured title and a live Xbox Services connection; see
+/// <c>docs/known-gaps.md</c>.
 /// </para>
 /// </remarks>
 internal sealed class GameCoreAchievementService : IAchievementService

@@ -23,15 +23,16 @@ of a contract, and the game belongs on the other.
 
 ### Enforce your threading model at the boundary
 
-Every task a provider hands out and every event it raises resolves inside
-`IPlatformRuntime.Pump()`, which runs once per frame.
+`GameThreadContext` drains game and UI continuations at the start of each update, followed
+by `IPlatformRuntime.Pump()`. The platform pump drains selected dispatched work and
+processes Lobby and Party state changes. XBOX GDK.NET can complete tasks on a thread pool;
+`PumpDispatcher` moves selected completions through the frame pump, but their continuations
+may still run asynchronously.
 
-The original provider bought that guarantee at the task queue by using manual dispatch.
-XBOX GDK.NET completes on the thread pool, so the guarantee moved up to `PumpDispatcher`
-at the provider boundary instead. The rule survived a change of SDK because it was stated
-as a contract rather than as an implementation detail.
-
-The result is that gameplay, UI and netcode contain no locks and no dispatcher.
+Suspend and account-change notifications can arrive on platform callback threads. Suspend
+must run inline because there may be no next frame. The transferable lesson is to state
+which work is marshalled and which callbacks are exceptions, rather than assuming every
+provider event runs inside the pump.
 
 ### Require the platform without hiding failures
 
@@ -40,9 +41,9 @@ to succeed. GDK sign-in gates the main menu and all play, including Practice. A 
 runtime or failed sign-in stays on the sign-in screen with a reason the player can read.
 Practice keeps its local simulation but uses the signed-in account for settings and progress.
 
-A capability flag means the whole path works end to end. The provider does not advertise
-`Invites` or `Presence` merely because an entry point binds, because a flag that means
-"this export resolved" is worse than no flag.
+A capability flag describes an implemented path with its local dependencies available.
+It is not proof of account permission, correct title configuration or a successful live
+service call.
 
 ### Keep one platform session
 
@@ -53,12 +54,12 @@ input support belong to the GDK provider rather than an alternate platform.
 
 ### Use one native PlayFab identity
 
-Xbox login uses `PlayFabLocalUser.LoginAsync` once. The resulting entity serves Party,
+Xbox login uses `PlayFabLocalUser.LoginAsync` once. The resulting entity serves Party
 and Lobby. No second Xbox-token
 exchange, client session ticket, custom HTTP client or REST request DTO is needed.
 There is no alternate developer authentication path.
 
-The service owns the native entity; cloud operations borrow duplicate handles so signing
+The service owns the native entity; Lobby operations borrow duplicate handles so signing
 out cannot dispose the identity underneath an in-flight call. Shutdown cancels work and
 drains borrowers before the Gaming Runtime is released. Xbox replacement login first
 clears the previous identity and invalidates older sign-ins, even if the new login fails.
@@ -87,8 +88,9 @@ changes cancel active work and reject queued work captured for the old account.
 Suspension invalidates the folder synchronously and cancels outstanding file operations.
 After resume, the next read or write reacquires the folder. There is no title-side
 synchronization coordinator, reconciliation callback, write barrier or connectivity
-retry queue. Public cloud tasks are marshalled through `PumpDispatcher`, but shutdown
-drains the underlying workers without awaiting pump-dependent public completions.
+retry queue. With the runtime initialized, cloud-worker results are marshalled through
+`PumpDispatcher`, but shutdown drains the underlying workers without awaiting
+pump-dependent public completions. A runtime-unavailable result can return immediately.
 The bounded exit flush keeps pumping runtime completions rather than waiting on a
 queue that has stopped.
 First-run local settings are seeded without a cloud push, so the initial pull cannot
@@ -131,7 +133,7 @@ A suspend callback cannot queue work for a later frame, because the process is f
 immediately afterwards and there may be no later frame. The suspend path therefore does
 cheap straight-line work only: commit local state, drop the session, stop audio.
 
-Resume has no deadline, so it can return through the pump like everything else.
+Resume has no deadline, so the runtime queues it for the pump.
 
 ### Constraining freezes offline simulation only
 
@@ -216,16 +218,15 @@ useless.
 
 ## Saves and achievements
 
-### One container with one blob per key
+### Use the platform-provided save folder
 
-Connected storage uses a single synchronized container holding one blob each for settings,
-achievement stats and match history. Splitting them across containers would let the
-platform resolve each key from a different device independently, producing a state no
-device ever had.
+`XGameSaveFiles` supplies an account-bound folder; the title reads and writes a file per
+key, while the platform manages synchronization. Settings and achievement statistics use
+this cloud path. Match history uses the separate local tier and does not roam.
 
-A missing blob returns an empty payload rather than an error, because an absent-blob first
-run is the normal case. A title-specific size cap catches caller bugs before the service
-does.
+A missing file returns an empty payload rather than an error, because an absent-file first
+run is normal. Writes use temporary files and replacement, and a title-specific size cap
+catches caller bugs before the service does. Cross-device behavior still needs a live test.
 
 ### Merge achievements monotonically
 
@@ -319,9 +320,6 @@ Short facts that cost time to establish.
 - A sanitizer that clamps a hostile value has to distinguish "strictly positive" from
   "meaningfully zero". Clamping a scale of `-5` to `0` produces a projectile that looks
   valid and expires immediately.
-- PlayFab creates a statistic on first write with last-value-wins aggregation, so an
-  unconfigured high-score table ranks the most recent score rather than the best one. It
-  cannot be set from code.
 
 ## Measured results
 

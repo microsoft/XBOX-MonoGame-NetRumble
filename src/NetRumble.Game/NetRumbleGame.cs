@@ -25,10 +25,10 @@ namespace NetRumble.Game;
 /// match lives in <see cref="Gameplay.MatchSession"/>, owned by the gameplay screen.
 /// </para>
 /// <para>
-/// <b>Pump ordering.</b> <see cref="IPlatformRuntime.Pump"/> runs first in
-/// <see cref="Update"/>, before any game logic. Every platform task and event resolves
-/// inside that call, so by the time gameplay code runs the platform state for this
-/// frame is already settled and no locking is needed anywhere.
+/// <b>Pump ordering.</b> <see cref="GameThreadContext"/> drains UI continuations first,
+/// then <see cref="IPlatformRuntime.Pump"/> processes platform work before game logic.
+/// Suspend is delivered separately on the OS callback thread because it cannot wait for
+/// another frame; <see cref="LifecycleCoordinator"/> handles that deadline explicitly.
 /// </para>
 /// </remarks>
 public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
@@ -383,7 +383,7 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
         // belong to this frame's beginning rather than trailing a frame behind it.
         _mainThread.Pump();
 
-        // Always first. See the class remarks.
+        // Process platform state before the remaining game logic.
         _platform.Runtime.Pump();
 
         // MonoGame raises nothing when a pad is unplugged, so the only way to see it is

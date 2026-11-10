@@ -23,10 +23,9 @@ namespace NetRumble.Platform.GameCore.Interop;
 /// degrades to "no lifecycle events".
 /// </para>
 /// <para>
-/// <b>The callbacks arrive on an OS thread, not the pump.</b> Everything here does is
-/// hand the notification to a caller-supplied delegate; marshalling it onto the pump
-/// thread is <c>GameCoreRuntime</c>'s job, because the provider's threading contract
-/// says every event the game sees surfaces from <c>Pump</c>.
+/// <b>The callbacks arrive on an OS thread, not the pump.</b> This layer hands each
+/// notification to a caller-supplied delegate. <c>GameCoreRuntime</c> queues resume and
+/// constrain changes, but handles suspend inline because another frame may not run.
 /// </para>
 /// <para>
 /// The delegates are held in static fields for the process lifetime. A collected

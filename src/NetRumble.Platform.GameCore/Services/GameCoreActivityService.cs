@@ -41,11 +41,10 @@ namespace NetRumble.Platform.GameCore.Services;
 /// none.
 /// </para>
 /// <para>
-/// <b>None of it has been exercised against a live service.</b> This checkout has a
-/// working GDK but no devkit, no signed-in account and no real title configuration, so
-/// every call here compiles and is shaped correctly but has only ever returned
-/// <c>Unavailable</c> in practice. The SCID that <see cref="SetPresenceAsync"/> depends
-/// on is derived, not read from configuration - see <c>docs/design-notes.md</c>.
+/// Earlier console invite testing predates the native PlayFab migration; presence and
+/// the current end-to-end invite path still need live verification. The SCID comes from
+/// configuration when available, with a logged derived fallback. See
+/// <c>docs/known-gaps.md</c>.
 /// </para>
 /// <para>
 /// <b><see cref="ShowInviteUiAsync"/> is real</b> - it is the one member of this
@@ -92,9 +91,7 @@ internal sealed class GameCoreActivityService : IActivityService
     /// Drains activation callbacks queued since the last call. Must run from
     /// <see cref="GameCoreRuntime.Pump"/>: GDK.Net raises
     /// <see cref="GameActivationManager.Activated"/> on the Gaming Runtime's own thread,
-    /// so the queue below is what keeps this provider's "every event surfaces on the
-    /// pump thread" contract for activations - the same job
-    /// <see cref="PumpDispatcher"/> does for completions.
+    /// so the queue below delivers activation events on the pump thread.
     /// </summary>
     internal void Pump()
     {

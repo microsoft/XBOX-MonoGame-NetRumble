@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>NetRumble.Platform.PlayFab</RootNamespace>
-    <GdkNetRoot Condition="'$(GdkNetRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\gdk-dotnet\</GdkNetRoot>
+    <GdkNetRoot Condition="'$(GdkNetRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\gdk-dotnet\</GdkNetRoot>
     <SupportedOSPlatform>windows</SupportedOSPlatform>
   </PropertyGroup>
 

@@ -8,9 +8,9 @@ Please do not "fix" them without raising the decision first.
 
 ## Certification and platform behaviour
 
-The four requirements that block certification on XBOX Series X|S are implemented and are
-covered by automated checks, but two of them cannot be proven without XBOX Series X|S
-hardware.
+The sample implements the platform behaviors below, with automated checks for parts of
+them. Some still need XBOX Series X|S hardware to observe. This is a code and evidence
+map, not a certification assessment.
 
 | Area | State |
 |---|---|
@@ -19,7 +19,7 @@ hardware.
 | Controller loss surfaced to the player | Implemented and verified on driven runs |
 | State committed when the signed-in user is removed | Implemented. Needs hardware to observe, because no platform user-change notification has fired here. |
 
-Haptics are absent and are not required.
+Haptics are absent.
 
 ## Player-visible features
 
@@ -31,14 +31,8 @@ Haptics are absent and are not required.
 - **Remote players do not show service-verified gamertags, and the title never publishes a
   PlayFab display name.** Nothing calls `UpdateUserTitleDisplayName`, and PlayFab resolves
   no name on your behalf, so PlayFab surfaces show raw entity ids.
-- **Settings and match history are not separated per user on shared local storage.**
-- **Online play is not re-checked against live privilege state at the point of use.** The
-  check happens earlier in the flow.
-- **A lobby-code search does not stop after a single lookup**, and lobby focus is not
-  restored after a roster modal closes.
+- **Lobby focus is not restored after a roster modal closes.**
 - **The OS cursor is not restored while a gameplay popup covers the reticle.**
-- **The main menu shows no build identifier**, which is what makes a build-mismatch refusal
-  diagnosable by the person who hit it.
 - **Menus are not on the XBOX green theme.**
 
 ## Networking
@@ -54,20 +48,14 @@ These concern this sample's own title configuration and assets rather than its c
 they are fixed in Partner Center or in this repository. Skip this section unless you are
 working on the sample itself.
 
-- **Confirm the service configuration id.** The value the title initializes with is
-  derived rather than read from configuration, and the initialization call validates only
-  that the string is well formed. Join codes, invites and presence all work, which is
-  strong indirect evidence that it is correct, but nothing has confirmed it. Check this
-  first if achievements misbehave, because achievements are the one surface behind it that
-  has never been observed working.
+- **Confirm the service configuration id against the live title.** The value is read from
+  configuration, with a logged derived fallback when no value is supplied. Initialization
+  alone does not confirm that it belongs to the title. Check it if achievements or other
+  XBOX Services calls misbehave.
 - **Confirm the rich presence string ids.** They were inferred from the naming convention
   used by the Godot version of this sample. An id the service does not define is rejected
   service-side rather than caught locally. They are three constants, so correcting them is
   trivial. This depends on the same unconfirmed configuration id.
-- **Set the PlayFab statistic's aggregation method in Game Manager.** PlayFab creates a
-  statistic on first write with last-value-wins aggregation, so an unconfigured high-score
-  table silently ranks the most recent score instead of the best one. This cannot be done
-  from code.
 - **Replace the store logos.** The files in `storelogos\` are generated stand-ins.
 - **Replace the controller glyphs.** The glyphs in this repository are obvious
   placeholders. Certification-compliant controller art comes from the official XBOX design

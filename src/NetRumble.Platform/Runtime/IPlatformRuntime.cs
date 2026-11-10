@@ -5,18 +5,16 @@ namespace NetRumble.Platform;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The GDK and PlayFab SDKs are <b>pump-based</b>: completions are delivered only when
-/// the title drains a task queue (<c>XTaskQueueDispatch</c>) or processes state changes
-/// (<c>PartyManager::StartProcessingStateChanges</c>). The Godot port did this from the
-/// GDExtension's own <c>dispatch()</c>; here the game calls <see cref="Pump"/> once per
-/// frame from <c>Game.Update</c>.
+/// The game calls <see cref="Pump"/> once per frame to drain dispatched platform work
+/// and process PlayFab Lobby and Party state changes. GDK.Net also exposes
+/// <see cref="Task"/>-based operations that can complete on a thread-pool thread.
 /// </para>
 /// <para>
-/// <b>Threading contract, and why it matters for provider swapping.</b> Providers must
-/// resolve every <see cref="Task"/> they hand out, and raise every event they declare,
-/// on the thread that calls <see cref="Pump"/>. Game code is single-threaded and must
-/// never need a lock or a dispatcher. A provider that completes tasks on an SDK
-/// callback thread would push that burden into gameplay code and break the abstraction.
+/// <b>Threading.</b> The game installs a synchronization context so UI continuations
+/// resume on the game thread. Some callbacks are dispatched through the pump, but not
+/// all are. In particular, suspend and account-change notifications can arrive on
+/// platform callback threads. A suspend handler must not wait for another frame because
+/// the process may be frozen as soon as the callback returns.
 /// </para>
 /// </remarks>
 public interface IPlatformRuntime
