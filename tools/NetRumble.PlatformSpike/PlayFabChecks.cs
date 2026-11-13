@@ -3,7 +3,6 @@ using GDK.Net;
 using GDK.Net.PlayFab;
 using NetRumble.Platform;
 using NetRumble.Platform.Networking;
-using NetRumble.Platform.Offline;
 using NetRumble.Platform.PlayFab;
 using GDK.Net.PlayFab.Multiplayer;
 using GDK.Net.PlayFab.Party;
@@ -33,24 +32,16 @@ internal static class PlayFabChecks
         var placeholderConfig = new PlayFabConfiguration { TitleId = PlayFabConfiguration.PlaceholderTitleId };
         using (var placeholder = new PlayFabOnlineServices(placeholderConfig))
         {
-            var login = await placeholder.SignInWithCustomIdAsync("developer");
+            var login = await placeholder.SignInWithXboxUserAsync(null!, createAccount: false);
             Check("placeholder refuses login before any native call", login.Status == PlatformStatus.Unavailable);
             Check("a placeholder cannot publish an online identity", !placeholder.IsSignedIn && placeholder.EntityId.Length == 0);
-            Check("placeholder refuses cloud saves without native calls",
-                (await placeholder.GameSaves.SaveCloudAsync("settings", new byte[1])).Status == PlatformStatus.Unavailable);
-            Check("placeholder refuses cloud reads without native calls",
-                (await placeholder.GameSaves.LoadCloudAsync("settings")).Status == PlatformStatus.Unavailable);
         }
         using (var services = new PlayFabOnlineServices(config))
         {
             using var canceled = new CancellationTokenSource();
             canceled.Cancel();
-            var login = await services.SignInWithCustomIdAsync("developer", canceled.Token);
-#if DEBUG
+            var login = await services.SignInWithXboxUserAsync(null!, createAccount: false, canceled.Token);
             Check("canceled login never initializes native PlayFab", login.WasCanceled);
-#else
-            Check("Release forbids custom-ID login", login.Status == PlatformStatus.Unavailable);
-#endif
             var notifications = 0;
             services.SessionChanged += session => { if (session is null) { notifications++; } };
             services.SignOut();
@@ -63,6 +54,13 @@ internal static class PlayFabChecks
         TokenRefreshFailureChecks(config, Check);
         await ProviderShutdownChecks(config, Check);
         LobbyDisconnectChecks(config, Check);
+        await PartyTeardownBudgetChecks(Check);
+        await PartyPumpTeardownChecks(Check);
+        PartyReentrantResetChecks(Check);
+        PartyRegionResetChecks(Check);
+        await PartyAttemptCancellationChecks(Check);
+        await PartyEarlyAuthenticationChecks(Check);
+        await PartyLateLobbyChecks(Check);
 
         Check("adult account creation remains allowed", PlatformAgeGroup.Adult.AllowsSilentAccountCreation());
         Check("child account creation remains forbidden", !PlatformAgeGroup.Child.AllowsSilentAccountCreation());
@@ -85,51 +83,30 @@ internal static class PlayFabChecks
             Map(unchecked((int)0x80072EFD)).Status == PlatformStatus.NetworkFailure);
         Check("expired native sign-in maps to NotSignedIn",
             Map(PlayFabErrors.Noentitytoken).Status == PlatformStatus.NotSignedIn);
-        Check("closed lobbies report a player-facing refusal",
-            Map(PlayFabErrors.LobbyNotJoinable).Failed && Map(PlayFabErrors.LobbyNotJoinable).Message!.Contains("match"));
+        foreach (var error in new[] { PlayFabErrors.LobbyNotJoinable, PlayFabErrors.LobbyDoesNotExist })
+        {
+            var exception = new PlayFabException(error);
+            var refusal = PlayFabFailure.FromException(exception, "The request failed.");
+            Check($"{error:X8}: unavailable lobbies map to SessionNotJoinable",
+                refusal.Failed && refusal.Status == PlatformStatus.SessionNotJoinable);
+            Check($"{error:X8}: unavailable lobbies retain the player-facing refusal",
+                refusal.Message == "This match is full or no longer accepts players.");
+            Check($"{error:X8}: unavailable lobbies retain native diagnostics",
+                refusal.Diagnostics == exception.Message);
+            var typedRefusal = PlayFabFailure.For<PlayFabLobby>(refusal);
+            Check($"{error:X8}: typed lobby results preserve the refusal",
+                typedRefusal.Status == PlatformStatus.SessionNotJoinable
+                && typedRefusal.Message == refusal.Message
+                && typedRefusal.Result.Diagnostics == refusal.Diagnostics);
+        }
+        Check("unknown errors remain generic failures",
+            Map(unchecked((int)0x81234567)).Status == PlatformStatus.Failed);
         Check("unknown errors keep native diagnostics",
             Map(unchecked((int)0x81234567)).Diagnostics?.Contains("81234567") == true);
         Check("native-library absence is explicit",
             PlayFabFailure.FromException(new DllNotFoundException("PlayFabServices"), "missing").Status == PlatformStatus.Unavailable);
         Check("cancellation stays cancellation",
             PlayFabFailure.FromException(new OperationCanceledException(), "canceled").WasCanceled);
-
-        var acquired = 0;
-        var saves = new PlayFabGameSaveService(config, () => { acquired++; return null; });
-        var oversized = await saves.SaveCloudAsync("settings", new byte[PlayFabGameSaveService.MaxCloudBytes + 1]);
-        Check("oversized cloud writes are rejected before acquiring a user", oversized.Failed && acquired == 0);
-        var emptyKey = await saves.LoadCloudAsync("");
-        Check("empty save keys fail before acquiring a user", emptyKey.Failed && acquired == 0);
-        var edge = await saves.SaveCloudAsync("settings", new byte[PlayFabGameSaveService.MaxCloudBytes]);
-        Check("exactly 750 bytes pass size validation", edge.Status == PlatformStatus.NotSignedIn && acquired == 1);
-        Check("750 bytes encode to the 1000-character service limit",
-            Convert.ToBase64String(new byte[PlayFabGameSaveService.MaxCloudBytes]).Length == 1000);
-        var signedOutLoad = await saves.LoadCloudAsync("settings");
-        Check("signed-out reads require a native user", signedOutLoad.Status == PlatformStatus.NotSignedIn);
-        using (var cancel = new CancellationTokenSource())
-        {
-            cancel.Cancel();
-            Check("canceled cloud writes are canceled", (await saves.SaveCloudAsync("settings", new byte[1], cancel.Token)).WasCanceled);
-            Check("canceled cloud reads are canceled", (await saves.LoadCloudAsync("settings", cancel.Token)).WasCanceled);
-        }
-
-        var bytes = Enumerable.Range(0, 256).Select(i => (byte)i).ToArray();
-        var data = new Dictionary<string, UserDataRecord>
-        {
-            ["settings"] = new() { Value = Convert.ToBase64String(bytes) },
-            ["empty"] = new() { Value = "" },
-            ["corrupt"] = new() { Value = "not valid Base64!" },
-        };
-        var read = PlayFabGameSaveService.ReadUserDataValue(data, "settings");
-        Check("existing Base64 cloud data round-trips every byte", read.Succeeded && read.Value!.SequenceEqual(bytes));
-        Check("a missing save is a successful empty payload",
-            PlayFabGameSaveService.ReadUserDataValue(data, "missing").Value is { Length: 0 });
-        Check("an empty record is a successful empty payload",
-            PlayFabGameSaveService.ReadUserDataValue(data, "empty").Value is { Length: 0 });
-        Check("an absent data dictionary is a successful empty payload",
-            PlayFabGameSaveService.ReadUserDataValue(null, "missing").Value is { Length: 0 });
-        var corrupt = PlayFabGameSaveService.ReadUserDataValue(data, "corrupt");
-        Check("corrupt saves fail explicitly", corrupt.Failed && corrupt.Result.Diagnostics?.Contains("Base64") == true);
 
         Check("join codes normalize case", PlayFabLobbyClient.IsJoinCode("abcde"));
         Check("join-code filters retain the deployed search key",
@@ -181,25 +158,7 @@ internal static class PlayFabChecks
         Check("cached near-expiry tokens cannot cause a refresh every frame",
             PlayFabLobbyClient.RefreshAt(new EntityToken { Expiration = now.AddMinutes(1) }, now) == now.AddSeconds(30));
 
-        await using (var provider = new PlayFabPlatformProvider(new OfflinePlatformProvider(),
-            placeholderConfig, () => throw new InvalidOperationException("Must not start"), _ => { }))
-        {
-            Check("placeholder composition does not start the native runtime", (await provider.Runtime.InitializeAsync()).Succeeded);
-            Check("placeholder composition does not advertise cloud save",
-                !provider.Capabilities.HasFlag(PlatformCapabilities.CloudSave));
-        }
-        await using (var provider = new PlayFabPlatformProvider(new OfflinePlatformProvider(), config,
-            () => throw new PlatformNotSupportedException("No Gaming Runtime"), _ => { }))
-        {
-            var started = await provider.Runtime.InitializeAsync();
-            Check("developer PlayFab reports a missing native runtime", started.Status == PlatformStatus.Unavailable);
-            Check("missing native runtime does not advertise cloud save",
-                !provider.Capabilities.HasFlag(PlatformCapabilities.CloudSave));
-            var user = await provider.Identity.SignInAsync();
-            Check("local identity still works without PlayFab credentials", user.Succeeded && user.Value?.EntityId == "");
-        }
-
-        Console.WriteLine("    SKIP live authentication, user data and connected lobbies: require a configured native runtime and test accounts.");
+        Console.WriteLine("    SKIP live authentication and connected lobbies: require a configured native runtime and test accounts.");
         Console.WriteLine();
         return failures == 0 ? 0 : 1;
     }
@@ -385,6 +344,346 @@ internal static class PlayFabChecks
         }
     }
 
+    private static async Task PartyTeardownBudgetChecks(Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var budget = (TimeSpan)typeof(GameCorePartyService)
+            .GetField("LeaveTeardownBudget", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        check("Party teardown shares a six-second budget", budget == TimeSpan.FromSeconds(6));
+
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        var wait = (Task)typeof(GameCorePartyService).GetMethod("TryAwait", Flags)!
+            .Invoke(party, [default(PartyOperationId), cancellation.Token])!;
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            await wait.WaitAsync(TimeSpan.FromSeconds(2));
+            check("Party teardown cancellation is not swallowed", false);
+        }
+        catch (OperationCanceledException)
+        {
+            check("Party teardown stops waiting without a frame pump",
+                wait.IsCanceled && elapsed.Elapsed < TimeSpan.FromSeconds(2));
+        }
+        catch (TimeoutException)
+        {
+            check("Party teardown stops waiting without a frame pump", false);
+        }
+        finally
+        {
+            await party.LeaveAsync();
+        }
+
+        var pending = (System.Collections.IDictionary)typeof(GameCorePartyService)
+            .GetField("_pendingOperations", Flags)!.GetValue(party)!;
+        check("Party reset clears abandoned teardown operations", pending.Count == 0);
+    }
+
+    private static async Task PartyPumpTeardownChecks(Action<string, bool> check, bool nativeManager = false)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var type = typeof(GameCorePartyService);
+        var manager = nativeManager ? PartyManager.Initialize("A1B2C") : null;
+        if (manager is not null)
+        {
+            type.GetField("_party", Flags)!.SetValue(party, manager);
+        }
+        type.GetProperty(nameof(party.HasNetwork))!.SetValue(party, true);
+        var revision = (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!;
+        using var cancellation = new CancellationTokenSource();
+        var wait = (Task)type.GetMethod("TryTeardownAsync", Flags)!.Invoke(party,
+            [new Func<PartyOperationId?>(() => default(PartyOperationId)), revision, cancellation.Token])!;
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var cleanupRequested = new ManualResetEventSlim();
+        var assignment = new TaskCompletionSource<int>();
+        type.GetField("_peerAssignment", Flags)!.SetValue(party, assignment);
+        type.GetField("_peerAssignmentCancellation", Flags)!.SetValue(party, new CancellationToken(true));
+        var callback = assignment.Task.ContinueWith(_ =>
+        {
+            entered.Set();
+            if (!release.Wait(TimeSpan.FromSeconds(5)))
+            {
+                throw new TimeoutException("The blocked Party pump was not released.");
+            }
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        var pump = Task.Factory.StartNew(party.Pump, CancellationToken.None,
+            TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        Task cleanup = Task.CompletedTask;
+        try
+        {
+            check("Party race fixture enters the real pump", entered.Wait(TimeSpan.FromSeconds(2)));
+            if (!entered.IsSet)
+            {
+                return;
+            }
+            cleanup = Task.Run(async () =>
+            {
+                try
+                {
+                    await wait;
+                }
+                catch (OperationCanceledException)
+                {
+                    cleanupRequested.Set();
+                    type.GetMethod("CleanupSession", Flags)!.Invoke(party, [revision]);
+                }
+            });
+            cancellation.CancelAfter(TimeSpan.FromMilliseconds(100));
+            check("Party teardown deadline fires while the pump is active",
+                cleanupRequested.Wait(TimeSpan.FromSeconds(2)));
+            await Task.WhenAny(cleanup, Task.Delay(100));
+            check("deadline cleanup cannot reset a session during its pump",
+                cleanupRequested.IsSet && !cleanup.IsCompleted && party.HasNetwork
+                && ReferenceEquals(type.GetField("_party", Flags)!.GetValue(party), manager));
+        }
+        finally
+        {
+            release.Set();
+            await pump.WaitAsync(TimeSpan.FromSeconds(3));
+            await callback.WaitAsync(TimeSpan.FromSeconds(3));
+            await cleanup.WaitAsync(TimeSpan.FromSeconds(3));
+        }
+
+        var pending = (System.Collections.IDictionary)type.GetField("_pendingOperations", Flags)!.GetValue(party)!;
+        check("deadline cleanup completes after the pump exits",
+            wait.IsCanceled && !party.HasNetwork && pending.Count == 0);
+    }
+
+    private static void PartyRegionResetChecks(Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var type = typeof(GameCorePartyService);
+        var regions = (System.Collections.IList)type.GetField("_pendingRegions", Flags)!.GetValue(party)!;
+        var regionType = type.GetNestedType("PendingRegions", BindingFlags.NonPublic)!;
+        TaskCompletionSource<IReadOnlyList<PartyRegion>> RegisterRegion()
+        {
+            var region = Activator.CreateInstance(regionType, [new CancellationToken(true)])!;
+            regions.Add(region);
+            return (TaskCompletionSource<IReadOnlyList<PartyRegion>>)regionType
+                .GetProperty("Completion")!.GetValue(region)!;
+        }
+        var first = RegisterRegion();
+        var second = RegisterRegion();
+        var reset = first.Task.ContinueWith(_ =>
+            type.GetMethod("ResetSessionState", Flags)!.Invoke(party, null),
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        var canceledInsidePump = false;
+        var observe = second.Task.ContinueWith(_ =>
+            canceledInsidePump = (bool)type.GetField("_pumping", Flags)!.GetValue(party)!,
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        party.Pump();
+        reset.GetAwaiter().GetResult();
+        observe.GetAwaiter().GetResult();
+        check("region cancellation skips waits detached by a reentrant reset",
+            first.Task.IsCanceled && second.Task.IsCanceled && !canceledInsidePump && regions.Count == 0);
+    }
+
+    private static void PartyReentrantResetChecks(Action<string, bool> check, bool nativeManager = false)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var type = typeof(GameCorePartyService);
+        var manager = nativeManager ? PartyManager.Initialize("A1B2C") : null;
+        if (manager is not null)
+        {
+            type.GetField("_party", Flags)!.SetValue(party, manager);
+        }
+        var awaitOperation = type.GetMethod("AwaitOperationAsync", Flags)!
+            .MakeGenericMethod(typeof(PartyOperationCompleted));
+        Task RegisterOperation() => (Task)awaitOperation.Invoke(party,
+            [default(PartyOperationId), CancellationToken.None])!;
+        var pending = (System.Collections.IDictionary)type.GetField("_pendingOperations", Flags)!.GetValue(party)!;
+        var regions = (System.Collections.IList)type.GetField("_pendingRegions", Flags)!.GetValue(party)!;
+        var regionType = type.GetNestedType("PendingRegions", BindingFlags.NonPublic)!;
+        var region = Activator.CreateInstance(regionType, [CancellationToken.None])!;
+        var regionCompletion = (TaskCompletionSource<IReadOnlyList<PartyRegion>>)regionType
+            .GetProperty("Completion")!.GetValue(region)!;
+        regions.Add(region);
+        var oldRevision = (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!;
+        var oldOperation = (Task)type.GetMethod("TryTeardownAsync", Flags)!.Invoke(party,
+            [new Func<PartyOperationId?>(() => default(PartyOperationId)), oldRevision, CancellationToken.None])!;
+        var managerRetiredBeforeCleanup = false;
+        var oldCleanup = oldOperation.ContinueWith(_ =>
+        {
+            managerRetiredBeforeCleanup = type.GetField("_party", Flags)!.GetValue(party) is null
+                && !(bool)type.GetField("_pumping", Flags)!.GetValue(party)!;
+            type.GetMethod("CleanupSession", Flags)!.Invoke(party, [oldRevision]);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        Task newOperation = Task.CompletedTask;
+        var assignment = new TaskCompletionSource<int>();
+        type.GetField("_peerAssignment", Flags)!.SetValue(party, assignment);
+        type.GetField("_peerAssignmentCancellation", Flags)!.SetValue(party, new CancellationToken(true));
+        var reset = assignment.Task.ContinueWith(_ =>
+        {
+            type.GetMethod("ResetSessionState", Flags)!.Invoke(party, null);
+            check("reentrant reset atomically detaches operation and region waits",
+                pending.Count == 0 && regions.Count == 0);
+            check("reentrant reset defers detached cancellations until the pump exits",
+                !oldOperation.IsCompleted && !regionCompletion.Task.IsCompleted);
+            check("every reentrant reset schedules old manager retirement",
+                (bool)type.GetField("_disposeAfterPump", Flags)!.GetValue(party)!
+                && ReferenceEquals(type.GetField("_party", Flags)!.GetValue(party), manager));
+            newOperation = RegisterOperation();
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        party.Pump();
+        reset.GetAwaiter().GetResult();
+        oldCleanup.GetAwaiter().GetResult();
+        check("reset retires the manager before canceled leave cleanup runs",
+            managerRetiredBeforeCleanup);
+        check("detached Party waits cancel even when no native manager exists",
+            oldOperation.IsCanceled && regionCompletion.Task.IsCanceled);
+        check("old reset cancellation preserves a new operation registration",
+            !newOperation.IsCompleted && pending.Count == 1);
+        type.GetMethod("CleanupSession", Flags)!.Invoke(party, [oldRevision]);
+        check("stale leave cleanup cannot reset a newer session",
+            !newOperation.IsCompleted && pending.Count == 1);
+        var started = false;
+        var staleStep = (Task)type.GetMethod("TryTeardownAsync", Flags)!.Invoke(party,
+            [new Func<PartyOperationId?>(() => { started = true; return default(PartyOperationId); }),
+                oldRevision, CancellationToken.None])!;
+        check("stale leave cannot start native teardown in a newer session",
+            staleStep.IsCompletedSuccessfully && !started);
+
+        var disposeAssignment = new TaskCompletionSource<int>();
+        type.GetField("_peerAssignment", Flags)!.SetValue(party, disposeAssignment);
+        type.GetField("_peerAssignmentCancellation", Flags)!.SetValue(party, new CancellationToken(true));
+        var dispose = disposeAssignment.Task.ContinueWith(_ =>
+        {
+            party.Dispose();
+            check("reentrant Party disposal waits for native enumeration to exit",
+                (bool)type.GetField("_disposeAfterPump", Flags)!.GetValue(party)! && !newOperation.IsCompleted);
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        party.Pump();
+        dispose.GetAwaiter().GetResult();
+        check("pump exit finishes deferred disposal and cancellation",
+            !(bool)type.GetField("_disposeAfterPump", Flags)!.GetValue(party)!
+            && newOperation.IsCanceled && pending.Count == 0);
+    }
+
+    private static async Task PartyAttemptCancellationChecks(Action<string, bool> check, bool nativeManager = false)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var type = typeof(GameCorePartyService);
+        var revision = (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!;
+        var oldWait = (Task)type.GetMethod("TryAwait", Flags)!.Invoke(party,
+            [default(PartyOperationId), CancellationToken.None])!;
+        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<PlatformResult> CancelOldAttemptAsync()
+        {
+            try
+            {
+                await oldWait;
+            }
+            catch (OperationCanceledException)
+            {
+                await resume.Task;
+                return await (Task<PlatformResult>)type.GetMethod("CancelAttemptAsync", Flags)!
+                    .Invoke(party, [revision])!;
+            }
+            throw new InvalidOperationException("The old attempt was not canceled.");
+        }
+        var canceledAttempt = CancelOldAttemptAsync();
+        var assignment = new TaskCompletionSource<int>();
+        type.GetField("_peerAssignment", Flags)!.SetValue(party, assignment);
+        type.GetField("_peerAssignmentCancellation", Flags)!.SetValue(party, new CancellationToken(true));
+        var reset = assignment.Task.ContinueWith(_ =>
+            type.GetMethod("ResetSessionState", Flags)!.Invoke(party, null),
+            CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        party.Pump();
+        reset.GetAwaiter().GetResult();
+        var replacement = nativeManager ? PartyManager.Initialize("A1B2C") : null;
+        type.GetField("_party", Flags)!.SetValue(party, replacement);
+        type.GetProperty(nameof(party.HasNetwork))!.SetValue(party, true);
+        type.GetProperty(nameof(party.ConnectionString))!.SetValue(party, "replacement-session");
+        var replacementRevision = (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!;
+        var newWait = (Task)type.GetMethod("AwaitOperationAsync", Flags)!
+            .MakeGenericMethod(typeof(PartyOperationCompleted))
+            .Invoke(party, [default(PartyOperationId), CancellationToken.None])!;
+        resume.SetResult();
+        var canceled = await canceledAttempt.WaitAsync(TimeSpan.FromSeconds(3));
+        check("host/join cancellation handler retains the canceled result", canceled.WasCanceled);
+        check("old host/join cancellation cannot leave a replacement session",
+            party.HasNetwork && party.ConnectionString == "replacement-session"
+            && !newWait.IsCompleted
+            && ReferenceEquals(type.GetField("_party", Flags)!.GetValue(party), replacement)
+            && replacementRevision == (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!);
+    }
+
+    private static async Task PartyEarlyAuthenticationChecks(Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var type = typeof(GameCorePartyService);
+        PartyOperationId Operation(long id) => (PartyOperationId)Activator.CreateInstance(
+            typeof(PartyOperationId), Flags, null, [id], null)!;
+        var connectId = Operation(1);
+        var authenticateId = Operation(2);
+        var (connection, authentication) = ((Task<PartyConnectToNetworkCompleted>,
+            Task<PartyAuthenticateLocalUserCompleted>))type.GetMethod("AwaitConnectionOperations", Flags)!
+            .Invoke(party, [connectId, authenticateId, CancellationToken.None])!;
+        var pending = (System.Collections.IDictionary)type.GetField("_pendingOperations", Flags)!.GetValue(party)!;
+        check("connection and authentication waits register before pumping", pending.Count == 2);
+        var completedAuthentication = new PartyAuthenticateLocalUserCompleted(authenticateId,
+            PartyStateChangeResult.CanceledByTitle, 0, null, null, null);
+        var completedConnection = new PartyConnectToNetworkCompleted(connectId,
+            PartyStateChangeResult.CanceledByTitle, 0, default!, null);
+        var complete = type.GetMethod("CompleteOperation", Flags)!;
+        complete.Invoke(party, [completedAuthentication]);
+        complete.Invoke(party, [completedConnection]);
+        check("early authentication completion is retained before the connection await",
+            connection.IsCompletedSuccessfully && authentication.IsCompletedSuccessfully && pending.Count == 0);
+        check("connection and authentication retain their own completion",
+            ReferenceEquals(await connection.WaitAsync(TimeSpan.FromSeconds(2)), completedConnection)
+            && ReferenceEquals(await authentication.WaitAsync(TimeSpan.FromSeconds(2)), completedAuthentication));
+    }
+
+    private static async Task PartyLateLobbyChecks(Action<string, bool> check)
+    {
+        const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        using var party = new GameCorePartyService(new GameCoreIdentityService(new GameCoreRuntime()));
+        var type = typeof(GameCorePartyService);
+        var revision = (int)type.GetField("_sessionRevision", Flags)!.GetValue(party)!;
+        type.GetMethod("ResetSessionState", Flags)!.Invoke(party, null);
+        type.GetProperty(nameof(party.HasNetwork))!.SetValue(party, true);
+        type.GetProperty(nameof(party.JoinCode))!.SetValue(party, "NEWER");
+        type.GetField("_lobbyId", Flags)!.SetValue(party, "replacement-lobby");
+        var newWait = (Task)type.GetMethod("AwaitOperationAsync", Flags)!
+            .MakeGenericMethod(typeof(PartyOperationCompleted))
+            .Invoke(party, [default(PartyOperationId), CancellationToken.None])!;
+        var lobby = new PlayFabLobby
+        {
+            LobbyId = "late-lobby",
+            ConnectionString = "retired-network",
+            JoinCode = "OLDER",
+        };
+        var closedIds = new List<string>();
+        var adopt = type.GetMethod("AdoptHostedLobbyAsync", Flags)!;
+        var result = await (Task<PlatformResult<string>>)adopt.Invoke(party,
+            [lobby, revision, new Func<string, Task<PlatformResult>>(id =>
+            {
+                closedIds.Add(id);
+                return Task.FromResult(PlatformResult.Ok());
+            })])!;
+        check("late hosted lobby adoption returns cancellation", result.WasCanceled);
+        check("late hosted lobby cleanup closes only the returned lobby",
+            closedIds.SequenceEqual(["late-lobby"]));
+        check("late hosted lobby cleanup preserves replacement state",
+            party.HasNetwork && party.JoinCode == "NEWER" && !newWait.IsCompleted
+            && (string)type.GetField("_lobbyId", Flags)!.GetValue(party)! == "replacement-lobby");
+        var failure = await (Task<PlatformResult<string>>)adopt.Invoke(party,
+            [lobby, revision, new Func<string, Task<PlatformResult>>(_ =>
+                Task.FromResult(PlatformResult.Fail(PlatformStatus.NetworkFailure, "close failed", "close-diagnostics")))])!;
+        check("late hosted lobby cleanup surfaces close failures",
+            failure.Status == PlatformStatus.NetworkFailure && failure.Result.Diagnostics == "close-diagnostics");
+        check("failed late lobby cleanup still preserves the replacement",
+            party.HasNetwork && party.JoinCode == "NEWER" && !newWait.IsCompleted);
+    }
+
     private static void NativeLobbyResetChecks(Action<string, bool> check)
     {
         const BindingFlags Flags = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -440,14 +739,18 @@ internal static class PlayFabChecks
             }
             Console.WriteLine("    PASS Lobby manager disposal");
             var failures = 0;
-            NativeLobbyResetChecks((label, passed) =>
+            void Check(string label, bool passed)
             {
                 Console.WriteLine($"    {(passed ? "PASS" : "FAIL")} {label}");
                 if (!passed)
                 {
                     failures++;
                 }
-            });
+            }
+            NativeLobbyResetChecks(Check);
+            PartyPumpTeardownChecks(Check, nativeManager: true).GetAwaiter().GetResult();
+            PartyReentrantResetChecks(Check, nativeManager: true);
+            PartyAttemptCancellationChecks(Check, nativeManager: true).GetAwaiter().GetResult();
             return failures == 0 ? 0 : 1;
         }
         catch (Exception ex) when (PlayFabFailure.IsExpected(ex))

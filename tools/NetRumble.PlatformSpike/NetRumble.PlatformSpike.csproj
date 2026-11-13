@@ -4,13 +4,12 @@
     Phase 0 spike harness.
 
     Verifies the two things that decide whether this migration is viable:
-      1. The platform abstraction can be satisfied by more than one provider, and
-         swapping them is a one-line change.
+      1. The platform abstraction is satisfied by the GDK provider without MonoGame.
       2. The P/Invoke path really reaches the GDK when it is installed - initialize,
          sign in, read a gamertag - and degrades cleanly when it is not.
 
     Usage is documented in docs/platform-abstraction.md; the provider can be forced
-    with a "platform=offline" or "platform=gamecore" command line switch.
+    with a "platform=auto" or "platform=gamecore" command line switch.
   -->
 
   <PropertyGroup>

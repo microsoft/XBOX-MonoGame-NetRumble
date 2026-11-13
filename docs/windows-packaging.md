@@ -29,7 +29,7 @@ Alongside the publish output, the layout carries:
 
 Nothing installs those redistributables machine-wide, and inside a package only what the
 layout carries can be loaded. A package built without them installs and launches but
-degrades to offline. They come from the installed GDK. `third_party\party` is the fallback
+cannot sign in or use the affected services. They come from the installed GDK. `third_party\party` is the fallback
 for the three binaries it vendors, which are desktop builds and therefore correct for this
 target.
 
@@ -68,5 +68,4 @@ If the install times out with `0x800705b4`, see
 ## Before you submit anything
 
 The controller glyphs and store logos in this repository are placeholders. Replace both
-with real assets before taking any part of this sample into a submission. See
-[Known gaps](known-gaps.md#configuration-and-assets).
+with real assets before taking any part of this sample into a submission.

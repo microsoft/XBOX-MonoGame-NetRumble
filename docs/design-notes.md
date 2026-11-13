@@ -23,43 +23,43 @@ of a contract, and the game belongs on the other.
 
 ### Enforce your threading model at the boundary
 
-Every task a provider hands out and every event it raises resolves inside
-`IPlatformRuntime.Pump()`, which runs once per frame.
+`GameThreadContext` drains game and UI continuations at the start of each update, followed
+by `IPlatformRuntime.Pump()`. The platform pump drains selected dispatched work and
+processes Lobby and Party state changes. XBOX GDK.NET can complete tasks on a thread pool;
+`PumpDispatcher` moves selected completions through the frame pump, but their continuations
+may still run asynchronously.
 
-The original provider bought that guarantee at the task queue by using manual dispatch.
-XBOX GDK.NET completes on the thread pool, so the guarantee moved up to `PumpDispatcher`
-at the provider boundary instead. The rule survived a change of SDK because it was stated
-as a contract rather than as an implementation detail.
+Suspend and account-change notifications can arrive on platform callback threads. Suspend
+must run inline because there may be no next frame. The transferable lesson is to state
+which work is marshalled and which callbacks are exceptions, rather than assuming every
+provider event runs inside the pump.
 
-The result is that gameplay, UI and netcode contain no locks and no dispatcher.
+### Require the platform without hiding failures
 
-### An absent platform is a supported configuration
+The GDK provider reports availability and capabilities explicitly rather than pretending
+to succeed. GDK sign-in gates the main menu and all play, including Practice. A missing
+runtime or failed sign-in stays on the sign-in screen with a reason the player can read.
+Practice keeps its local simulation but uses the signed-in account for settings and progress.
 
-A machine with no GDK installed is how the front end and the practice match are developed,
-so the provider reports availability and capabilities explicitly rather than pretending to
-succeed. Multiplayer is gated with a reason the player can read. Achievements, saves and
-presence degrade to working no-ops.
+A capability flag describes an implemented path with its local dependencies available.
+It is not proof of account permission, correct title configuration or a successful live
+service call.
 
-A capability flag means the whole path works end to end. The provider does not advertise
-`Invites` or `Presence` merely because an entry point binds, because a flag that means
-"this export resolved" is worse than no flag.
+### Keep one platform session
 
-### Compose orthogonal services as layers
-
-PlayFab cloud save and lobby discovery are independent of the transport, so they compose
-over whichever provider is active. They use the native GDK runtime even in developer
-modes. That is what makes
-`--platform=lan --playfab-title=<id>` work without an enum value for every combination of
-transport and cloud tier.
+The GDK provider owns identity, native runtime lifetime, Party and Lobby. Both `auto`
+and `gamecore` startup modes construct that provider. A missing runtime never selects
+another implementation or creates a guest identity. Local save storage and MonoGame
+input support belong to the GDK provider rather than an alternate platform.
 
 ### Use one native PlayFab identity
 
-Xbox login uses `PlayFabLocalUser.LoginAsync` once. The resulting entity serves Party,
-Lobby and the typed `PlayerDataManagement` user-data wrappers. No second Xbox-token
+Xbox login uses `PlayFabLocalUser.LoginAsync` once. The resulting entity serves Party
+and Lobby. No second Xbox-token
 exchange, client session ticket, custom HTTP client or REST request DTO is needed.
-Custom-ID authentication uses the native Authentication wrapper and remains Debug-only.
+There is no alternate developer authentication path.
 
-The service owns the native entity; cloud operations borrow duplicate handles so signing
+The service owns the native entity; Lobby operations borrow duplicate handles so signing
 out cannot dispose the identity underneath an in-flight call. Shutdown cancels work and
 drains borrowers before the Gaming Runtime is released. Xbox replacement login first
 clears the previous identity and invalidates older sign-ins, even if the new login fails.
@@ -79,8 +79,24 @@ is released. Only final shutdown actively drains completions while waiting. Lobb
 disposes Party and clears pending session work before notifying the game; expired
 sign-in also clears the shared PlayFab identity so another Host or Join can authenticate.
 
-The user-data payload format is unchanged: Base64 under the existing keys, with a
-750-byte limit. XGameSave remains the default console cloud tier.
+The GDK provider uses XGameSaveFiles, through GDK.Net's
+`GameSaveFiles.GetFolderWithUiAsync`. It obtains the signed-in user's save folder on
+the first file operation; the GDK handles synchronization outside the title process.
+Each save key names a file directly in the SDK-provided directory.
+File operations are serialized, writes replace a temporary file atomically, and account
+changes cancel active work and reject queued work captured for the old account.
+Suspension invalidates the folder synchronously and cancels outstanding file operations.
+After resume, the next read or write reacquires the folder. There is no title-side
+synchronization coordinator, reconciliation callback, write barrier or connectivity
+retry queue. With the runtime initialized, cloud-worker results are marshalled through
+`PumpDispatcher`, but shutdown drains the underlying workers without awaiting
+pump-dependent public completions. A runtime-unavailable result can return immediately.
+The bounded exit flush keeps pumping runtime completions rather than waiting on a
+queue that has stopped.
+First-run local settings are seeded without a cloud push, so the initial pull cannot
+be preceded by a write of defaults.
+Shutdown waits for folder acquisition and file operations before releasing the runtime.
+See the [XGameSaveFiles overview](https://learn.microsoft.com/en-us/gaming/gdk/docs/features/common/game-save/xgamesavefiles).
 
 ## Connectivity and lifecycle
 
@@ -90,9 +106,6 @@ The GDK sources a connectivity hint from the runtime's networking surface, and i
 property of the machine rather than of the signed-in user. It therefore lives on
 `IPlatformRuntime` as `IsConnectivityKnown`, `IsOnline`, `OfflineReason` and
 `ConnectivityChanged`, rather than in a service of its own.
-
-The LAN provider deliberately does not relay that hint, because "can this machine reach the
-internet" and "can this machine reach a peer on the LAN" are different questions.
 
 ### Connectivity fails open
 
@@ -120,7 +133,7 @@ A suspend callback cannot queue work for a later frame, because the process is f
 immediately afterwards and there may be no later frame. The suspend path therefore does
 cheap straight-line work only: commit local state, drop the session, stop audio.
 
-Resume has no deadline, so it can return through the pump like everything else.
+Resume has no deadline, so the runtime queues it for the pump.
 
 ### Constraining freezes offline simulation only
 
@@ -162,18 +175,16 @@ ship input to the transport's sender id rather than to anything in the payload.
 
 ### The hole was in peer attribution
 
-The transports decided which peer id a datagram carried, which is the fact the entire
+The transport decided which peer id a message carried, which is the fact the entire
 authority model rests on, and no amount of codec validation can check it.
 
-- The Party path accepted a five-byte "welcome" control packet from **any** endpoint in the
-  session and treated the sender as host. Any player could take authority over another,
-  which is enough to teleport ships, rewrite scores or end the match.
-- The LAN transport identified peers by source address alone, with no handshake secret.
+The Party path accepted a five-byte "welcome" control packet from **any** endpoint in the
+session and treated the sender as host. Any player could take authority over another,
+which is enough to teleport ships, rewrite scores or end the match.
 
-Both are fixed. The Party path now requires the sender to be the actual host entity,
+The Party path now requires the sender to be the actual host entity,
 requires a join to be in flight, refuses to remap an endpoint already assigned to another
-peer, and validates the claimed id. The LAN transport issues an eight-byte per-link session
-token during the handshake and requires it on every link-scoped datagram.
+peer, and validates the claimed id.
 
 The transferable lesson: **audit identity attribution before you trust message
 validation.** Validating a message perfectly proves nothing if you cannot prove who sent
@@ -182,16 +193,10 @@ it.
 The control-packet magic value provides framing. It never provided identity, and treating a
 public constant as a secret is the mistake to look for.
 
-### What the LAN session token does not do
-
-The session token raises the cost of impersonation from "know two public constants" to
-"read this link's traffic". It is not encryption and it stops no on-path observer. See
-[Known gaps](known-gaps.md#networking).
-
 ### Bounds belong next to the parsing
 
-Alongside the identity fixes, the review added a networked projectile ceiling, a world-size
-sanity range, an inbox cap of 4096 packets and a 256-slot bound on reliable reordering.
+Alongside the identity fixes, the review added a networked projectile ceiling and a
+world-size sanity range.
 These are resource limits rather than correctness fixes, and they belong next to the code
 that parses untrusted input.
 
@@ -213,16 +218,15 @@ useless.
 
 ## Saves and achievements
 
-### One container with one blob per key
+### Use the platform-provided save folder
 
-Connected storage uses a single synchronized container holding one blob each for settings,
-achievement stats and match history. Splitting them across containers would let the
-platform resolve each key from a different device independently, producing a state no
-device ever had.
+`XGameSaveFiles` supplies an account-bound folder; the title reads and writes a file per
+key, while the platform manages synchronization. Settings and achievement statistics use
+this cloud path. Match history uses the separate local tier and does not roam.
 
-A missing blob returns an empty payload rather than an error, because an absent-blob first
-run is the normal case. A title-specific size cap catches caller bugs before the service
-does.
+A missing file returns an empty payload rather than an error, because an absent-file first
+run is normal. Writes use temporary files and replacement, and a title-specific size cap
+catches caller bugs before the service does. Cross-device behavior still needs a live test.
 
 ### Merge achievements monotonically
 
@@ -268,26 +272,7 @@ This class of bug is the strongest argument for using a maintained managed proje
 instead of hand-written interop. None of those signatures is this repository's to get wrong
 any more.
 
-### Do not conclude a native SDK is usable from its export list
-
-The native PlayFab DLLs export the authentication functions you would want to call. They
-export no `XAsync*` or `XTaskQueue*` symbols, so managed code cannot complete the async
-operations those functions return. The sample speaks PlayFab's documented HTTPS JSON API
-instead, which needs no native dependency at all.
-
 ## Testing lessons
-
-### A passing test that proved nothing
-
-A test that forged a UDP datagram to prove the LAN session token was enforced passed even
-when the token check was disabled. The attacker socket used a different ephemeral source
-port, so the datagram was rejected for having no link at all, before token validation was
-ever reached.
-
-**Disable the defence and confirm the test fails.** A security test that has never failed
-has never been shown to test anything. The fix was to rename the test to describe what it
-actually proves, add direct checks on the framing layer, and pin the maximum fragment
-payload against the token prefix that now precedes it.
 
 ### Test the consumer as well as the data
 
@@ -335,11 +320,6 @@ Short facts that cost time to establish.
 - A sanitizer that clamps a hostile value has to distinguish "strictly positive" from
   "meaningfully zero". Clamping a scale of `-5` to `0` produces a projectile that looks
   valid and expires immediately.
-- PlayFab creates a statistic on first write with last-value-wins aggregation, so an
-  unconfigured high-score table ranks the most recent score rather than the best one. It
-  cannot be set from code.
-- PlayFab user-data values are capped at 1,000 characters, which is roughly 750 bytes after
-  Base64 encoding.
 
 ## Measured results
 
@@ -347,7 +327,6 @@ Short facts that cost time to establish.
 |---|---|
 | Idle `Pump()` cost | 0.01 to 0.03 microseconds against a 16.6 ms frame budget |
 | Practice bots | Eight-player start in 0 ms, ten seconds of simulation in 38 ms |
-| LAN transport | A 31-object world snapshot survived fragmentation and reassembly intact |
 | Connectivity grace period | Sustained loss ended the match at exactly 8.0 s; a 4.0 s flap did not |
 | Constrain handling | Elapsed time held at 0.00 s for four seconds, then resumed normally after unconstrain |
 | Controller overlay | Match clock ran 9:55 to 9:52 underneath the overlay, with a bot scoring during it |

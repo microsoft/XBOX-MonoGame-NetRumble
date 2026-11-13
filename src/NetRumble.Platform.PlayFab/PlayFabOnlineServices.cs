@@ -4,7 +4,7 @@ using NetRumble.Platform.Diagnostics;
 
 namespace NetRumble.Platform.PlayFab;
 
-/// <summary>Owns the native PlayFab identity, lobby client and user-data services.</summary>
+/// <summary>Owns the native Xbox-backed PlayFab identity and lobby client.</summary>
 /// <remarks>
 /// Pump and dispose on the provider's pump thread. Await <see cref="ShutdownAsync"/>
 /// before releasing the Gaming Runtime.
@@ -23,10 +23,9 @@ public sealed class PlayFabOnlineServices : IDisposable
     private long _generation;
     private bool _disposed;
 
-    public PlayFabOnlineServices(PlayFabConfiguration configuration, string? localSaveRoot = null)
+    public PlayFabOnlineServices(PlayFabConfiguration configuration)
     {
         Configuration = configuration;
-        GameSaves = new PlayFabGameSaveService(configuration, AcquireEntity, _shutdown.Token, localSaveRoot, () => EntityId);
         Lobbies = new PlayFabLobbyClient(configuration, AcquireEntity, _shutdown.Token);
         Lobbies.ConnectionLost += failure =>
         {
@@ -41,7 +40,6 @@ public sealed class PlayFabOnlineServices : IDisposable
     public PlayFabSession? Session => Volatile.Read(ref _session);
     public bool IsSignedIn => Session is not null;
     public string EntityId => Session?.EntityId ?? string.Empty;
-    public IGameSaveService GameSaves { get; }
     internal PlayFabLobbyClient Lobbies { get; }
     public event Action<PlayFabSession?>? SessionChanged;
 
@@ -80,26 +78,6 @@ public sealed class PlayFabOnlineServices : IDisposable
                 throw;
             }
         }, cancellationToken);
-
-    /// <summary>Developer-only native login; never creates accounts in Release builds.</summary>
-    public Task<PlatformResult<PlayFabSession>> SignInWithCustomIdAsync(
-        string customId, CancellationToken cancellationToken = default)
-    {
-#if DEBUG
-        if (string.IsNullOrWhiteSpace(customId))
-        {
-            return Task.FromResult(PlatformResult<PlayFabSession>.Fail(
-                PlatformStatus.NotSignedIn, "A developer user id is required."));
-        }
-        return SignInAsync(async (config, token) =>
-            (await Authentication.LoginWithCustomIDAsync(config,
-                new AuthenticationLoginWithCustomIDRequest { CustomId = customId, CreateAccount = true },
-                token).ConfigureAwait(false), null), cancellationToken);
-#else
-        return Task.FromResult(PlatformResult<PlayFabSession>.Unavailable(
-            "Developer PlayFab sign-in is not available in this build."));
-#endif
-    }
 
     private async Task<PlatformResult<PlayFabSession>> SignInAsync(
         Func<PlayFabServiceConfig, CancellationToken, Task<(PlayFabLoginResult Login, PlayFabLocalUser? User)>> login,

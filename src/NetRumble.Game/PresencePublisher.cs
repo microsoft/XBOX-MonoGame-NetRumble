@@ -1,6 +1,7 @@
 using NetRumble.Game.UI;
 using NetRumble.Game.UI.Screens;
 using NetRumble.Platform;
+using NetRumble.Platform.Diagnostics;
 
 namespace NetRumble.Game;
 
@@ -50,9 +51,16 @@ namespace NetRumble.Game;
 public sealed class PresencePublisher
 {
     private readonly UiContext _context;
+    private readonly object _gate = new();
+    private string? _wantedAccount;
+    private string _wanted = string.Empty;
+    private string? _publishedAccount;
+    private bool _inFlight;
+    private long _revision;
+    private long _accountGeneration;
 
     /// <summary>
-    /// The last id handed to the platform, so a presence call only goes out when the
+    /// The last id successfully published, so a presence call only goes out when the
     /// state actually changes. Screens push and pop constantly - every dialog, every
     /// options visit - and each publish is a service round trip, so re-sending the id
     /// already in effect would be pure traffic.
@@ -72,39 +80,85 @@ public sealed class PresencePublisher
 
     private void OnScreenChanged(Screen screen) => Publish();
 
-    /// <summary>
-    /// Re-publishes from scratch when the user changes. Presence is per-user and the
-    /// normal boot order is menus-then-sign-in, so the id in effect was almost certainly
-    /// rejected for want of a signed-in account: the cached value is dropped rather than
-    /// trusted, or the player would sit at empty presence until they changed screens.
-    /// </summary>
-    private void OnUserChanged(PlatformUser? user)
-    {
-        _published = string.Empty;
-        Publish();
-    }
+    private void OnUserChanged(PlatformUser? user) => Publish();
 
     private void Publish()
     {
-        // No capability means no presence surface - the offline and LAN providers report
-        // this - so there is nothing to call and nothing to fail.
+        // Without the native presence capability, there is no service to call.
         if (!_context.Platform.Capabilities.HasFlag(PlatformCapabilities.Presence))
         {
             return;
         }
 
-        var id = Resolve();
-
-        if (id == _published)
+        lock (_gate)
         {
-            return;
+            var account = _context.Platform.Identity.CurrentUser?.LocalId;
+            if (account != _wantedAccount)
+            {
+                _publishedAccount = null;
+                _accountGeneration++;
+            }
+            _wantedAccount = account;
+            _wanted = Resolve();
+            _revision++;
         }
+        Kick();
+    }
 
-        _published = id;
+    private void Kick()
+    {
+        string id;
+        string account;
+        long revision;
+        long accountGeneration;
+        lock (_gate)
+        {
+            if (_inFlight || _wantedAccount is null
+                || (_publishedAccount == _wantedAccount && _published == _wanted))
+            {
+                return;
+            }
+            _inFlight = true;
+            account = _wantedAccount;
+            id = _wanted;
+            revision = _revision;
+            accountGeneration = _accountGeneration;
+        }
+        _ = SendAsync(account, id, revision, accountGeneration);
+    }
 
-        // Best-effort and unawaited, matching every other presence/activity call in this
-        // port: presence is cosmetic, and a title that cannot publish it carries on.
-        _ = _context.Platform.Activity.SetPresenceAsync(id);
+    private async Task SendAsync(string account, string id, long revision, long accountGeneration)
+    {
+        var succeeded = false;
+        try
+        {
+            var result = await _context.Platform.Activity.SetPresenceAsync(id).ConfigureAwait(false);
+            succeeded = result.Succeeded;
+            if (result.Failed)
+            {
+                CrashLog.Mark($"presence: publication failed ({result}).");
+            }
+        }
+        catch (Exception ex)
+        {
+            CrashLog.Mark($"presence: publication failed ({ex.GetType().Name}).");
+        }
+        finally
+        {
+            bool sendLatest;
+            lock (_gate)
+            {
+                if (accountGeneration == _accountGeneration)
+                {
+                    _publishedAccount = succeeded ? account : null;
+                    if (succeeded) { _published = id; }
+                }
+                _inFlight = false;
+                // A failed send waits for another event, unless one arrived in flight.
+                sendLatest = succeeded || revision != _revision;
+            }
+            if (sendLatest) { Kick(); }
+        }
     }
 
     /// <summary>

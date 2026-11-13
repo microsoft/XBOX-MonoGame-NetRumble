@@ -38,15 +38,13 @@ namespace NetRumble.Platform.GameCore.Services;
 /// <see cref="SetPresenceAsync"/> through <c>.Presence</c>. All of them need a signed-in
 /// user and a live Xbox Services context, so all of them degrade to
 /// <see cref="PlatformResult.Unavailable(string)"/> rather than throwing when there is
-/// none - exactly like <c>NetRumble.Platform.Offline</c>'s stub, so the game plays
-/// offline on a machine with no GDK.
+/// none.
 /// </para>
 /// <para>
-/// <b>None of it has been exercised against a live service.</b> This checkout has a
-/// working GDK but no devkit, no signed-in account and no real title configuration, so
-/// every call here compiles and is shaped correctly but has only ever returned
-/// <c>Unavailable</c> in practice. The SCID that <see cref="SetPresenceAsync"/> depends
-/// on is derived, not read from configuration - see <c>docs/design-notes.md</c>.
+/// Earlier console invite testing predates the native PlayFab migration; presence and
+/// the current end-to-end invite path still need live verification. The SCID comes from
+/// configuration when available, with a logged derived fallback. See
+/// <c>docs/known-gaps.md</c>.
 /// </para>
 /// <para>
 /// <b><see cref="ShowInviteUiAsync"/> is real</b> - it is the one member of this
@@ -93,9 +91,7 @@ internal sealed class GameCoreActivityService : IActivityService
     /// Drains activation callbacks queued since the last call. Must run from
     /// <see cref="GameCoreRuntime.Pump"/>: GDK.Net raises
     /// <see cref="GameActivationManager.Activated"/> on the Gaming Runtime's own thread,
-    /// so the queue below is what keeps this provider's "every event surfaces on the
-    /// pump thread" contract for activations - the same job
-    /// <see cref="PumpDispatcher"/> does for completions.
+    /// so the queue below delivers activation events on the pump thread.
     /// </summary>
     internal void Pump()
     {
@@ -412,8 +408,7 @@ internal sealed class GameCoreActivityService : IActivityService
         _groupId = null;
 
         // Nothing was ever published, so there is nothing to clear and no failure for the
-        // caller to react to. This also keeps the offline-equivalent behaviour on a
-        // machine with no GDK, where the session simply never advertised itself.
+        // caller to react to.
         if (!_activityPublished || !_xbl.TryGetContext(out var context))
         {
             _activityPublished = false;
@@ -670,8 +665,7 @@ internal sealed class GameCoreActivityService : IActivityService
     /// <b><paramref name="status"/> is a presence string id, not display text.</b> Xbox
     /// rich presence strings live in the title's service configuration and are referenced
     /// by id; XSAPI has no way to show free text a title invents at runtime. The
-    /// interface's parameter is a bare string because the offline provider has no such
-    /// constraint, so this provider treats it as the configured id and an empty value as
+    /// provider treats the parameter as the configured id and an empty value as
     /// "active in title, no specific string".
     /// </para>
     /// <para>

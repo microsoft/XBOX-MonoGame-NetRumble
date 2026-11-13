@@ -25,10 +25,10 @@ namespace NetRumble.Game;
 /// match lives in <see cref="Gameplay.MatchSession"/>, owned by the gameplay screen.
 /// </para>
 /// <para>
-/// <b>Pump ordering.</b> <see cref="IPlatformRuntime.Pump"/> runs first in
-/// <see cref="Update"/>, before any game logic. Every platform task and event resolves
-/// inside that call, so by the time gameplay code runs the platform state for this
-/// frame is already settled and no locking is needed anywhere.
+/// <b>Pump ordering.</b> <see cref="GameThreadContext"/> drains UI continuations first,
+/// then <see cref="IPlatformRuntime.Pump"/> processes platform work before game logic.
+/// Suspend is delivered separately on the OS callback thread because it cannot wait for
+/// another frame; <see cref="LifecycleCoordinator"/> handles that deadline explicitly.
 /// </para>
 /// </remarks>
 public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
@@ -44,7 +44,6 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
 
     private readonly GraphicsDeviceManager _graphics;
     private readonly IPlatformProvider _platform;
-    private readonly string[] _commandLineArgs;
     private readonly string? _localDataRoot;
 
     /// <summary>
@@ -69,6 +68,11 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
     private readonly Random _random = new();
     private readonly UiInput _uiInput = new();
     private readonly ScreenManager _screens = new();
+#if GDKX
+    private int _loggedControllerConnections = -1;
+    private int _loggedControllerActivity;
+    private int _controllerConnectionReports;
+#endif
 
     private SpriteBatch? _spriteBatch;
     private Texture2D? _pixel;
@@ -104,11 +108,8 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
         // GameThreadContext for what that was costing.
         _mainThread = GameThreadContext.Install();
 
-        _commandLineArgs = args;
-
-        // XR-003: the three debug switches below are compiled out of release builds, the
-        // same way ResolveUserToken compiles out the developer sign-in token. Autopilot's
-        // own remarks say "nothing here should ever be reachable in a shipping build" -
+        // XR-003: the three debug switches below are compiled out of release builds.
+        // Autopilot must not be reachable in a shipping build -
         // it force-quits the process when its run ends - and a packaged PC title launched
         // through its execution alias does receive command-line arguments, so leaving the
         // parse in a retail build means shipping that switch to players.
@@ -171,7 +172,7 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
 
     /// <summary>True once the platform has reported a final state, good or bad.</summary>
     public bool PlatformSettled
-        => _bootState is PlatformBootState.Ready or PlatformBootState.Degraded or PlatformBootState.Failed;
+        => _bootState is PlatformBootState.Ready or PlatformBootState.Failed;
 
     /// <summary>True when the platform initialised cleanly.</summary>
     public bool PlatformReady => _bootState == PlatformBootState.Ready;
@@ -229,9 +230,7 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
 
         _audio = new AudioManager(_assets, _random);
 
-        var userToken = ResolveUserToken();
-
-        _profile = new PlayerProfile(userToken, _localDataRoot);
+        _profile = new PlayerProfile(_localDataRoot);
         _profile.AttachAudio(_audio);
         _profile.Load();
         ApplyDisplaySettings();
@@ -268,7 +267,6 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
             Pixel = _pixel,
             Game = this,
             Random = _random,
-            DeveloperCustomId = userToken,
         };
 
         _screens.Context = _context;
@@ -302,49 +300,8 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
         Activated += (_, _) => _lifecycle.SetConstrained(false);
         Deactivated += (_, _) => _lifecycle.SetConstrained(true);
 
-        // Boot flow from main.gd: the acquire-user screen gates the *menu*, not the game -
-        // it offers "Continue Offline" for players who cannot or will not sign in.
+        // No front-end or gameplay screen is available before GDK sign-in.
         _screens.Push(new AcquireUserScreen());
-    }
-
-    /// <summary>
-    /// Reads the developer identity override used by the local multi-instance Party test
-    /// path, from <c>--pf-user=&lt;name&gt;</c> or the <c>PF_CUSTOM_ID</c> environment
-    /// variable.
-    /// </summary>
-    /// <remarks>
-    /// This does two jobs, and for a long time only did the first. It gives each instance
-    /// its own settings file, so two clients on one PC do not share and overwrite each
-    /// other's appearance; and it becomes <see cref="SignInOptions.DeveloperCustomId"/>,
-    /// which is what actually gives the instance a distinct identity. Without the second,
-    /// every instance signs in as "Player" - indistinguishable in the roster, the
-    /// scoreboard and the standings - and the PlayFab custom-id sign-in path declines to
-    /// run at all, because it requires a non-empty id.
-    /// </remarks>
-    private string? ResolveUserToken()
-    {
-#if DEBUG
-        const string Prefix = "--pf-user=";
-
-        foreach (var arg in _commandLineArgs)
-        {
-            if (arg.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return arg[Prefix.Length..];
-            }
-        }
-
-        var environment = Environment.GetEnvironmentVariable("PF_CUSTOM_ID");
-
-        return string.IsNullOrWhiteSpace(environment) ? null : environment;
-#else
-        // XR-013: LoginWithCustomID authenticates nobody - anyone who guesses the
-        // string owns the account. The multi-instance local test path this token also
-        // names settings files for has no reason to exist in a shipping build, so the
-        // whole path - not just the PlayFab call it eventually reaches - is compiled
-        // out here rather than relying on downstream composition to leave it unreachable.
-        return null;
-#endif
     }
 
     /// <summary>
@@ -425,13 +382,41 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
             (viewportHeight - (DesignHeight * RenderScale)) * 0.5f);
     }
 
+#if GDKX
+    private void TraceConsoleControllers()
+    {
+        var connected = 0;
+        var supported = GamePad.MaximumGamePadCount;
+        for (var slot = 0; slot < supported; slot++)
+        {
+            var state = GamePad.GetState(slot);
+            var bit = 1 << slot;
+            if (state.IsConnected)
+            {
+                connected |= bit;
+            }
+            if (state.Buttons.A == ButtonState.Pressed && (_loggedControllerActivity & bit) == 0)
+            {
+                _loggedControllerActivity |= bit;
+                CrashLog.Mark($"input: managed slot {slot} received A; sampled by UI={slot == 0}");
+            }
+        }
+        if (connected != _loggedControllerConnections && _controllerConnectionReports < 16)
+        {
+            _loggedControllerConnections = connected;
+            _controllerConnectionReports++;
+            CrashLog.Mark($"input: MonoGame connected mask=0x{connected:X}; supported={supported}; UI slot=0; platform={_bootState}");
+        }
+    }
+#endif
+
     protected override void Update(GameTime gameTime)
     {        // Before the platform pump and before any screen runs: continuations queued since
         // the last frame are the tail halves of work the game already started, so they
         // belong to this frame's beginning rather than trailing a frame behind it.
         _mainThread.Pump();
 
-        // Always first. See the class remarks.
+        // Process platform state before the remaining game logic.
         _platform.Runtime.Pump();
 
         // MonoGame raises nothing when a pad is unplugged, so the only way to see it is
@@ -455,6 +440,9 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
         // with this frame's letterbox, not the one the previous Draw left behind.
         UpdateViewportMetrics();
 
+#if GDKX
+        TraceConsoleControllers();
+#endif
         _uiInput.Update(
             keyboard,
             GamePad.GetState(PlayerIndex.One),
@@ -468,6 +456,12 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
             _context.Delta = delta;
             _context.Time = (float)gameTime.TotalGameTime.TotalSeconds;
             _context.Screen = new Rectangle(0, 0, DesignWidth, DesignHeight);
+
+            if (_platform.Identity.CurrentUser is null && _screens.Find<AcquireUserScreen>() is null)
+            {
+                _screens.ReplaceAll(new AcquireUserScreen());
+            }
+
             _screens.Update(_context);
 
             // After the screens, so a held invite sees the stack they just produced -
@@ -555,13 +549,7 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
                 return;
             }
 
-            // A missing native runtime is a supported configuration, not a failure: the
-            // front end and offline play still work. Distinguish the two so the UI can say
-            // something accurate.
-            _bootState = _platform.Runtime.IsRuntimeAvailable
-                ? PlatformBootState.Failed
-                : PlatformBootState.Degraded;
-
+            _bootState = PlatformBootState.Failed;
             _bootDetail = result.Message ?? string.Empty;
         }
         catch (Exception ex)
@@ -632,12 +620,25 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
 
         try
         {
-            Task.WhenAll(pending).Wait(TimeSpan.FromSeconds(3));
+            var work = Task.WhenAll(pending);
+            var deadline = Environment.TickCount64 + 3000;
+            while (!work.IsCompleted && Environment.TickCount64 < deadline)
+            {
+                _platform.Runtime.Pump();
+                Thread.Sleep(1);
+            }
+            if (work.IsCompleted)
+            {
+                work.GetAwaiter().GetResult();
+            }
+            else
+            {
+                CrashLog.Mark("gamesave: exit flush exceeded its three-second budget.");
+            }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // Shutdown. Nothing useful can be done with a failure here, and throwing
-            // would turn a lost cloud write into a crash on exit.
+            CrashLog.Fatal("gamesave: exit flush failed", ex);
         }
     }
 
@@ -659,7 +660,6 @@ public sealed class NetRumbleGame : Microsoft.Xna.Framework.Game
         NotStarted,
         Starting,
         Ready,
-        Degraded,
         Failed,
     }
 }

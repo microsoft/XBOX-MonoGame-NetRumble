@@ -22,20 +22,19 @@ public enum TranscriptionMode
 /// </summary>
 /// <remarks>
 /// <para>
-/// Settings live in an INI-shaped file under local app data, keeping the section and key
-/// names Godot's <c>ConfigFile</c> used so a file written by either port stays readable by
-/// the other.
+/// Settings live in an INI-shaped file under local app data, using the section and key
+/// names from Godot's <c>ConfigFile</c>. Sharing files between ports needs separate
+/// compatibility verification.
 /// </para>
 /// <para>
-/// The cloud payload from <see cref="ToDictionary"/> deliberately still uses the
-/// <c>SettingKeyToString()</c> names from the C++ sample, so PlayFab Game Saves remain
-/// interchangeable across all three implementations.
+/// The cloud payload from <see cref="ToDictionary"/> uses the C++ sample's
+/// <c>SettingKeyToString()</c> names. This build stores that payload through
+/// XGameSaveFiles; matching field names alone do not prove cross-title interoperability.
 /// </para>
 /// </remarks>
 public sealed class PlayerProfile
 {
     private readonly string _root;
-    private readonly bool _pathIsPinned;
 
     /// <summary>
     /// The settings file currently in use, or empty while no user is established.
@@ -44,28 +43,20 @@ public sealed class PlayerProfile
     /// <para>
     /// <b>Empty until sign-in, deliberately (XR-052).</b> This used to be seeded at boot
     /// from a <c>last-profile.txt</c> pointer naming whichever account last signed in on
-    /// the device, so that the player's own volume levels were applied before the first
-    /// note of music played. The pre-certification audit found the cost of that: the next
-    /// person to use a shared console, if they never signed in and played through
-    /// Continue Offline, had their <see cref="Save"/> write straight back into
-    /// <c>settings_&lt;previous xuid&gt;.cfg</c> and silently overwrite the first
-    /// player's settings under the first player's account.
+    /// the device. Boot must not read or overwrite another player's settings.
     /// </para>
     /// <para>
     /// So boot now starts from the built-in defaults and an unsigned session is held
     /// entirely in memory: <see cref="Load"/> and <see cref="Save"/> both no-op while
     /// this is empty. <see cref="Rehome"/> supplies a path the moment an identity
-    /// exists, and loads that account's real settings then. The cost is that an offline
-    /// session's setting changes do not survive a restart, which is the correct trade:
-    /// they belong to nobody, and there is no file they can be written to that is not
-    /// somebody else's.
+    /// exists, and loads that account's real settings then.
     /// </para>
     /// </remarks>
     private string _path;
     private AudioManager? _audio;
     private CloudSettingsSync? _cloud;
 
-    public PlayerProfile(string? userToken = null, string? root = null)
+    public PlayerProfile(string? root = null)
     {
         root ??= Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -74,21 +65,10 @@ public sealed class PlayerProfile
         Directory.CreateDirectory(root);
         _root = root;
 
-        // Instances launched with --pf-user=<name> (the local multi-instance Party test
-        // path, debug builds only) get their own settings file; otherwise every client on
-        // one PC would share and overwrite the same settings and appearance. That token
-        // is an established identity as far as this class is concerned, so it is the one
-        // case where a path exists before Rehome.
-        _pathIsPinned = !string.IsNullOrWhiteSpace(userToken);
-
-        _path = _pathIsPinned
-            ? Path.Combine(root, $"settings_{Sanitise(userToken!)}.cfg")
-            : string.Empty;
+        _path = string.Empty;
     }
 
     public event Action? SettingsChanged;
-
-    public event Action? IdentityChanged;
 
     public string DisplayName { get; private set; } = "Player";
 
@@ -157,7 +137,6 @@ public sealed class PlayerProfile
         EntityId = entityId;
         XboxUserId = xuid;
         IsSignedIn = !string.IsNullOrEmpty(entityId) || !string.IsNullOrEmpty(xuid);
-        IdentityChanged?.Invoke();
     }
 
     /// <summary>
@@ -177,21 +156,9 @@ public sealed class PlayerProfile
     /// defaults at the same time, so the departing player's appearance and levels do not
     /// linger for whoever signs in next.
     /// </para>
-    /// <para>
-    /// Distinct from the <c>--pf-user</c> constructor override: that scopes an entire
-    /// debug-only process to one file for the life of the run so several local
-    /// instances used for Party testing do not collide, and never changes afterwards.
-    /// This method re-homes the live profile mid-session, for a single instance whose
-    /// signed-in user only becomes known after boot.
-    /// </para>
     /// </remarks>
     public void Rehome(string? userId)
     {
-        if (_pathIsPinned)
-        {
-            return;
-        }
-
         var path = string.IsNullOrWhiteSpace(userId)
             ? string.Empty
             : Path.Combine(_root, $"settings_{Sanitise(userId)}.cfg");
@@ -222,7 +189,16 @@ public sealed class PlayerProfile
             // First time this account has signed in here. Seed its file from whatever is
             // in memory now - the built-in defaults, or settings the player changed on the
             // way in - rather than leaving it absent until they next change something.
-            Save();
+            var wasSuppressed = SuppressCloudPush;
+            SuppressCloudPush = true;
+            try
+            {
+                Save();
+            }
+            finally
+            {
+                SuppressCloudPush = wasSuppressed;
+            }
         }
     }
 

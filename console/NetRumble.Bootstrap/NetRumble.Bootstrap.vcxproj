@@ -161,6 +161,7 @@
   </Target>
 
   <Target Name="BuildNativeGdkxDependencies" BeforeTargets="VerifyGdkxInputs" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Exec Command="git -C &quot;$(MonoGameRoot)GDKX&quot; apply --reverse --check &quot;$(RepoRoot)tools\patches\monogame-xbox-input.patch&quot; 2&gt;nul || git -C &quot;$(MonoGameRoot)GDKX&quot; apply &quot;$(RepoRoot)tools\patches\monogame-xbox-input.patch&quot;" />
     <Exec Command="&quot;$(MSBuildToolsPath)\MSBuild.exe&quot; &quot;$(NativeAotGdkxRoot)Runtime\Runtime.vcxproj&quot; /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:PlatformToolset=$(PlatformToolset) /m /nologo /v:minimal" />
     <Exec Command="&quot;$(MSBuildToolsPath)\MSBuild.exe&quot; &quot;$(NativeAotGdkxRoot)System.IO.Compression.Native\System.IO.Compression.Native.vcxproj&quot; /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:PlatformToolset=$(PlatformToolset) /m /nologo /v:minimal" />
     <Exec Command="&quot;$(MSBuildToolsPath)\MSBuild.exe&quot; &quot;$(MonoGameRoot)GDKX\native\monogame\monogame.xbox.vcxproj&quot; /p:Configuration=$(Configuration) /p:Platform=$(Platform) /p:PlatformToolset=$(PlatformToolset) /m /nologo /v:minimal" />
@@ -251,6 +252,7 @@
     <Copy SourceFiles="@(GdkxLayoutBinary)" DestinationFolder="$(GdkxLooseDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(GdkxLayoutContent)" DestinationFiles="@(GdkxLayoutContent->'$(GdkxLooseDir)Content\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(GdkxLayoutLogo)" DestinationFiles="@(GdkxLayoutLogo->'$(GdkxLooseDir)storelogos\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Exec Command="dotnet run --project &quot;$(RepoRoot)tools\NetRumble.NativeImportChecks\NetRumble.NativeImportChecks.csproj&quot; --configuration $(Configuration) --no-launch-profile -- &quot;$(RepoRoot)src\NetRumble.Game.GDKX\bin\$(Configuration)\net8.0\MonoGame.Framework.dll&quot; &quot;$(GdkxLooseDir)mgruntime.dll&quot;" />
     <Message Importance="high" Text="Console layout staged at $(GdkxLooseDir)" />
   </Target>
 

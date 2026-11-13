@@ -1,6 +1,5 @@
 using NetRumble.Platform.GameCore.Interop;
 using NetRumble.Platform.GameCore.Services;
-using NetRumble.Platform.Offline;
 using NetRumble.Platform.PlayFab;
 
 namespace NetRumble.Platform.GameCore;
@@ -11,16 +10,15 @@ namespace NetRumble.Platform.GameCore;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Partial by design.</b> Runtime and identity are GDK-backed; the remaining
-/// services still delegate to their offline counterparts and are filled in through
-/// Phase 5 and Phase 6. Because <see cref="Capabilities"/> reports only what is really
-/// wired, the game hides the rest rather than calling into a stub.
+/// Runtime, identity and online services are GDK-backed. <see cref="Capabilities"/>
+/// reports locally available service paths, not account permission or a proven live
+/// service round trip.
 /// </para>
 /// <para>
-/// <b>Replacing this provider.</b> A standalone C# GDK would replace this class and the
-/// whole <c>Interop</c> folder, and nothing else in the solution. The contract it must
-/// keep is in <see cref="IPlatformRuntime"/>: every task it hands out and every event it
-/// raises must surface on the thread that calls <see cref="IPlatformRuntime.Pump"/>.
+/// <b>Replacing this provider.</b> Keep native details behind
+/// <see cref="IPlatformProvider"/> and its service interfaces. Follow the threading and
+/// lifecycle guidance in <see cref="IPlatformRuntime"/> rather than assuming every
+/// callback or task continuation runs inside <see cref="IPlatformRuntime.Pump"/>.
 /// </para>
 /// </remarks>
 public sealed class GameCorePlatformProvider : IPlatformProvider
@@ -28,45 +26,33 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     private readonly GameCoreRuntime _runtime;
     private readonly GameCoreXblContext _xbl;
     private readonly GameCoreOnlineSession _online;
-    private readonly OfflinePlatformProvider _fallback;
-#if !NETRUMBLE_PLAYFAB_GAMESAVE
     private readonly GameCoreGameSaveService _saves;
-#endif
 
     public GameCorePlatformProvider(string? saveRoot = null, PlayFabConfiguration? playFab = null)
     {
         _runtime = new GameCoreRuntime();
-        _fallback = new OfflinePlatformProvider(saveRoot);
+        GameInput = new NullGameInputService();
         _online = new GameCoreOnlineSession(
             _runtime,
-            playFab ?? new PlayFabConfiguration { TitleId = PlayFabConfiguration.PlaceholderTitleId },
-            saveRoot);
+            playFab ?? new PlayFabConfiguration { TitleId = PlayFabConfiguration.PlaceholderTitleId });
 
         Identity = new GameCoreIdentityService(_runtime, _online);
         var identity = (GameCoreIdentityService)Identity;
 
         _xbl = new GameCoreXblContext(_runtime, identity);
 
-#if !NETRUMBLE_PLAYFAB_GAMESAVE
-        // The cloud tier is the GDK's connected storage (M10). The local tier moves with
-        // it onto the Xbox account, because a save service that no longer talks to
-        // PlayFab must not still need a PlayFab login to decide which folder a file
-        // belongs in; the PlayFab entity id is passed as the legacy key so a player
-        // upgrading from a PlayFab-backed build still reads their existing files.
         _saves = new GameCoreGameSaveService(
             _runtime,
             identity,
             saveRoot,
-            () => identity.CurrentUser?.LocalId,
-            () => _online.EntityId is { Length: > 0 } entityId ? entityId : null);
-#endif
+            () => identity.CurrentUser?.LocalId);
 
         Privileges = new GameCorePrivilegeService(_runtime, identity);
         Achievements = new GameCoreAchievementService(_runtime, identity, _xbl);
         Social = new GameCoreSocialService(_runtime, identity, _xbl);
         Moderation = new GameCoreModerationService(_runtime, identity, _xbl);
         Privacy = new GameCorePrivacyService(_runtime, identity, _xbl);
-        PlatformUi = new GameCorePlatformUiService(_runtime, identity);
+        PlatformUi = new GameCorePlatformUiService(_runtime);
 
         Party = new GameCorePartyService(
             _runtime, identity, _online, _online.Configuration, (GameCoreModerationService)Moderation);
@@ -74,9 +60,7 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         var activity = new GameCoreActivityService(_runtime, identity, _xbl);
         Activity = activity;
 
-        // Pumped from GameCoreRuntime.Pump rather than called directly from here - see
-        // GameCoreActivityService's own remarks on why activation callbacks must land on
-        // the same thread every other provider event does.
+        // Pumped from GameCoreRuntime.Pump so activation callbacks reach the game thread.
         _runtime.Activity = activity;
         _runtime.Party = (GameCorePartyService)Party;
         _runtime.Online = _online;
@@ -124,19 +108,10 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
                     | PlatformCapabilities.VoiceChat;
             }
 
-#if NETRUMBLE_PLAYFAB_GAMESAVE
-            // The PlayFab user-data tier is the whole of cloud save in this build, so a
-            // placeholder title id means there is no cloud save to advertise.
-            if (!_online.Configuration.IsPlaceholder)
-            {
-                capabilities |= PlatformCapabilities.CloudSave;
-            }
-#else
             // Connected storage is a Gaming Runtime service and knows nothing about
             // PlayFab, so gating it on a PlayFab title id would hide roaming saves on
             // exactly the console builds that are required to have them.
             capabilities |= PlatformCapabilities.CloudSave;
-#endif
 
             return capabilities;
         }
@@ -159,41 +134,25 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
     public IPlatformUiService PlatformUi { get; }
 
     // --- Mixed-provider services -------------------------------------------
-    // Party, Activity and GameSaves are all backed by the same
-    // GameCoreOnlineSession, so the Xbox user produces exactly one PlayFab identity.
+    // Party uses GameCoreOnlineSession; XGameSaveFiles uses the Xbox user directly.
     // GameInput is deliberately never GDK-backed - see its own remarks below.
 
     public IPartyService Party { get; }
     public IActivityService Activity { get; }
 
     /// <summary>
-    /// Local save plus a roaming cloud tier.
+    /// Local saves plus XGameSaveFiles connected storage through GDK.Net.
     /// </summary>
-    /// <remarks>
-    /// <para>
-    /// Which cloud tier is a build-time choice, because the two do not coexist usefully:
-    /// they would roam the same keys to two different places and disagree. Connected
-    /// storage (<see cref="GameCoreGameSaveService"/>) is the default and the one XBOX
-    /// certification is written against; defining <c>NETRUMBLE_PLAYFAB_GAMESAVE</c> -
-    /// through <c>/p:NetRumbleCloudSave=PlayFab</c> - selects the PlayFab user-data tier
-    /// instead, which is what the desktop <c>PlayFabPlatformProvider</c> uses
-    /// unconditionally because it has no GDK user handle to give connected storage.
-    /// </para>
-    /// </remarks>
-#if NETRUMBLE_PLAYFAB_GAMESAVE
-    public IGameSaveService GameSaves => _online.GameSaves;
-#else
     public IGameSaveService GameSaves => _saves;
-#endif
 
     /// <summary>
-    /// Delegated on purpose, not left unimplemented. <c>docs/platform-abstraction.md</c>
+    /// A null service on purpose, not left unimplemented. <c>docs/platform-abstraction.md</c>
     /// assigns <see cref="IGameInputService"/> to MonoGame's own <c>GamePad</c>/<c>Keyboard</c>
     /// APIs rather than the GDK's GameInput SDK - the Godot source's GameInput usage is
     /// for controller identification/haptics on console, which is a <c>NetRumble.Game</c>
     /// concern outside this provider's scope, not a gap in this phase's work.
     /// </summary>
-    public IGameInputService GameInput => _fallback.GameInput;
+    public IGameInputService GameInput { get; }
 
     /// <summary>
     /// Tears down the provider.
@@ -234,14 +193,9 @@ public sealed class GameCorePlatformProvider : IPlatformProvider
         _runtime.PumpUntil(Party.LeaveAsync(), RemainingUntil(deadline));
         await Identity.SignOutAsync().ConfigureAwait(false);
         _runtime.PumpUntil(_xbl.ShutdownAsync(), RemainingUntil(deadline));
-#if !NETRUMBLE_PLAYFAB_GAMESAVE
-        // Before the runtime goes down: the provider holds a native handle bound to a
-        // user that sign-out has already released.
-        _saves.Dispose();
-#endif
+        await _saves.ShutdownAsync().ConfigureAwait(false);
         await _online.ShutdownAsync().ConfigureAwait(false);
         await _runtime.ShutdownAsync().ConfigureAwait(false);
-        await _fallback.DisposeAsync().ConfigureAwait(false);
     }
 
     /// <summary>

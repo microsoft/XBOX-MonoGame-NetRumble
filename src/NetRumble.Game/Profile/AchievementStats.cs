@@ -7,7 +7,7 @@ namespace NetRumble.Game.Profile;
 
 /// <summary>
 /// The cumulative progress behind the five progressive achievements, persisted through
-/// <see cref="IGameSaveService"/>: local tier always, PlayFab cloud tier once signed in.
+/// <see cref="IGameSaveService"/>: local tier always, platform cloud tier once signed in.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -25,10 +25,6 @@ namespace NetRumble.Game.Profile;
 /// or a set of flags), so the merge is the maximum of the counters and the union of the
 /// bit sets. That can over-count if the same match is somehow recorded twice, and cannot
 /// lose progress - the right way round for an achievement counter.
-/// </para>
-/// <para>
-/// <b>Size.</b> Five integers, well inside the 750 bytes a PlayFab user-data value allows
-/// once Base64-encoded.
 /// </para>
 /// </remarks>
 public sealed class AchievementStats
@@ -313,6 +309,7 @@ public sealed class AchievementStats
     public async Task SyncCloudAsync(IGameSaveService saves, CancellationToken cancellationToken = default)
     {
         var result = await saves.LoadCloudAsync(SaveKey, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (result.Failed)
         {
@@ -321,13 +318,16 @@ public sealed class AchievementStats
             return;
         }
 
-        if (result.Value is { Length: > 0 } bytes && TryParse(bytes) is { } cloud)
+        if (result.Value is { Length: > 0 } bytes)
         {
+            if (TryParse(bytes) is not { } cloud)
+            {
+                NetRumble.Platform.Diagnostics.CrashLog.Mark("gamesave: the cloud achievement record is malformed.");
+                return;
+            }
             MergeFrom(cloud);
         }
 
-        // Unconditional: even when the cloud had nothing to add, this is the write that
-        // seeds a brand new account from whatever was earned offline.
         await SaveAsync(saves, cancellationToken);
     }
 
@@ -338,7 +338,7 @@ public sealed class AchievementStats
         IsDirty = false;
 
         await saves.SaveLocalAsync(SaveKey, bytes, cancellationToken);
-        await saves.SaveCloudAsync(SaveKey, bytes, cancellationToken);
+        await saves.SaveCloudAsync(SaveKey, Serialise(), cancellationToken);
     }
 
     /// <summary>

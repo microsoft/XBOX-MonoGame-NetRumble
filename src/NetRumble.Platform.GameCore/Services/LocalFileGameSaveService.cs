@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace NetRumble.Platform.Offline;
+namespace NetRumble.Platform.GameCore.Services;
 
 /// <summary>
 /// Local-disk save storage. A real implementation, not a stub.
@@ -21,21 +21,15 @@ public partial class LocalFileGameSaveService : IGameSaveService
 {
     private readonly string _root;
     private readonly Func<string?>? _currentUserId;
-    private readonly Func<string?>? _legacyUserId;
 
     /// <summary>
     /// The unsigned session's saves, held in memory and never written to disk (XR-052).
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This used to be a shared file per key directly under the save root, used whenever
-    /// <see cref="_currentUserId"/> could not resolve anyone - boot, and the whole of a
-    /// Continue Offline session. The pre-certification audit traced a real leak through
-    /// it: the boot-time achievement load read that shared bucket before anyone signed
-    /// in, and nothing discarded it afterwards, so the next account to sign in had a
-    /// stranger's progress merged underneath its own, reported to the service as its own
-    /// and flushed into its own bucket. Test 052-05 Correct User Association targets
-    /// exactly that.
+    /// Boot-time reads must not adopt a previous user's progress before sign-in.
+    /// Until an account exists, data stays in memory so it cannot be attributed to
+    /// another account later (XR-052).
     /// </para>
     /// <para>
     /// There is no file a save can belong to before an identity exists, so an unsigned
@@ -56,29 +50,14 @@ public partial class LocalFileGameSaveService : IGameSaveService
     /// match history (XR-052). When this returns nothing, the save is held in memory for
     /// the life of the process instead: see <see cref="_anonymous"/>.
     /// </param>
-    /// <param name="legacyUserId">
-    /// An id the same account's files were scoped under by a previous build, read only
-    /// when <paramref name="currentUserId"/>'s folder has no file for the key.
-    /// </param>
-    /// <remarks>
-    /// <paramref name="legacyUserId"/> exists because the scoping key is a build-time
-    /// choice, and changing it - as switching the cloud backend from PlayFab to connected
-    /// storage does, since one is keyed on a PlayFab entity and the other on an Xbox
-    /// account - would otherwise present a player with an empty profile and look
-    /// indistinguishable from losing their data. The fallback is read-only and one-way:
-    /// the next save writes under the current id, so the old folder is superseded rather
-    /// than kept in step.
-    /// </remarks>
     public LocalFileGameSaveService(
         string? root = null,
-        Func<string?>? currentUserId = null,
-        Func<string?>? legacyUserId = null)
+        Func<string?>? currentUserId = null)
     {
         _root = root ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "NetRumble");
         _currentUserId = currentUserId;
-        _legacyUserId = legacyUserId;
     }
 
     public async Task<PlatformResult> SaveLocalAsync(
@@ -135,15 +114,7 @@ public partial class LocalFileGameSaveService : IGameSaveService
             if (!File.Exists(path))
             {
                 // Absent is not an error: first run has no settings and no history.
-                // Before concluding that, look where a previous build would have put it.
-                if (TryResolveLegacyPath(key, out var legacy) && File.Exists(legacy))
-                {
-                    path = legacy;
-                }
-                else
-                {
-                    return PlatformResult<byte[]>.Ok(Array.Empty<byte>());
-                }
+                return PlatformResult<byte[]>.Ok([]);
             }
 
             var bytes = await File.ReadAllBytesAsync(path, cancellationToken)
@@ -180,21 +151,13 @@ public partial class LocalFileGameSaveService : IGameSaveService
     /// there is no on-disk fallback (XR-052).
     /// </returns>
     private bool TryResolvePath(string key, out string path)
-        => TryResolvePath(key, _currentUserId?.Invoke(), out path);
-
-    /// <summary>
-    /// Maps a save key onto the path a previous build's scoping key would have produced.
-    /// </summary>
-    private bool TryResolveLegacyPath(string key, out string path)
-        => TryResolvePath(key, _legacyUserId?.Invoke(), out path);
-
-    private bool TryResolvePath(string key, string? userId, out string path)
     {
         if (string.IsNullOrWhiteSpace(key))
         {
             throw new ArgumentException("Save key must not be empty.", nameof(key));
         }
 
+        var userId = _currentUserId?.Invoke();
         if (string.IsNullOrWhiteSpace(userId))
         {
             path = string.Empty;

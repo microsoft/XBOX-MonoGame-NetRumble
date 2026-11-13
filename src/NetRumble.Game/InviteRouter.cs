@@ -12,14 +12,9 @@ namespace NetRumble.Game;
 /// active match screen, and neither should have to know about invites.
 /// </summary>
 /// <remarks>
-/// <b>What is actually verifiable here.</b> <see cref="IActivityService.InviteAccepted"/>
-/// only ever fires from a real Xbox-signed-in session receiving a real platform
-/// activation - see <c>GameCoreActivityService</c>'s own remarks for exactly what that
-/// needs and why it cannot be exercised in this environment. This class's own logic
-/// (queuing until sign-in, the "already mid-match" confirmation, and handing the
-/// connection string to <see cref="LobbyScreen"/>) is ordinary, synchronous game-layer
-/// code and needs no platform at all to be correct, but the one thing that would prove
-/// it end-to-end - a real invite arriving - could not be produced here.
+/// <see cref="IActivityService.InviteAccepted"/> requires a real platform activation.
+/// Earlier console invite testing predates the native PlayFab migration; queuing and
+/// routing an invite does not by itself prove the current end-to-end join path.
 /// </remarks>
 public sealed class InviteRouter
 {

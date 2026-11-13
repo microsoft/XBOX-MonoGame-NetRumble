@@ -5,14 +5,9 @@ namespace NetRumble.Platform;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Ported from <c>addons/godot_gameinput</c>. The game routes gamepad input through
-/// here rather than MonoGame's <c>GamePad</c> because the sample depends on GameInput
-/// for device enumeration, hot-plug notification and XR-compliant haptics.
-/// </para>
-/// <para>
-/// Providers that lack GameInput may implement this over any backend — the offline
-/// provider wraps MonoGame's own <c>GamePad</c> — so gameplay code never has two input
-/// paths to reconcile.
+/// Ported from <c>addons/godot_gameinput</c>. The current game reads input through
+/// MonoGame's <c>GamePad</c> and <c>Keyboard</c>, so the GDK provider supplies a null
+/// implementation here. Account-controller associations belong to <see cref="IIdentityService"/>.
 /// </para>
 /// </remarks>
 public interface IGameInputService

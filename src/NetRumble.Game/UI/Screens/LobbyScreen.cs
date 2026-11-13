@@ -102,6 +102,7 @@ public sealed class LobbyScreen : Screen
 
     private bool _ready;
     private bool _transitioning;
+    private bool _exited;
     private bool _connectFailed;
     private string _connectingText = "Connecting\u2026";
     private string _countdownText = string.Empty;
@@ -114,8 +115,7 @@ public sealed class LobbyScreen : Screen
     /// one does: a join code whose lobby row outlived its host resolves happily and then
     /// blocks on a Party handshake with nobody to answer it, leaving the player on the
     /// connecting screen with no timeout and no error. Cancelling here rather than in
-    /// one backend gives every provider the same guarantee - the LAN transport already
-    /// enforces a shorter deadline of its own, which simply wins.
+    /// one backend gives every provider the same guarantee.
     /// </remarks>
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(30);
 
@@ -252,6 +252,8 @@ public sealed class LobbyScreen : Screen
 
     public override void Exit()
     {
+        // Async setup may still complete after an invite or navigation replaces us.
+        _exited = true;
         _list.PointerFocused -= OnRosterPointerFocused;
 
         if (_network is not null)
@@ -318,6 +320,11 @@ public sealed class LobbyScreen : Screen
         try
         {
             await ApplyCommunicationsPrivilegeAsync(context);
+            if (_exited || _transitioning)
+            {
+                return;
+            }
+
             await context.Platform.Privacy.RefreshListsAsync();
             await EvaluatePrivacyAsync(context);
         }
@@ -829,7 +836,12 @@ public sealed class LobbyScreen : Screen
 
         if (user is null)
         {
-            var signIn = await identity.SignInAsync(context.InteractiveSignIn);
+            var signIn = await identity.SignInAsync(SignInOptions.Interactive);
+
+            if (_exited || _transitioning)
+            {
+                return;
+            }
 
             if (!signIn.Succeeded)
             {
@@ -847,7 +859,12 @@ public sealed class LobbyScreen : Screen
         // revoked, or resolved, in between. useCache:false forces a live query at the
         // one point that matters: immediately before HostAsync/JoinAsync actually stands
         // up the session.
-        var verdict = await context.Platform.Privileges.CheckAsync(GamePrivilege.Multiplayer, useCache: false);
+        var verdict = await context.Platform.Privileges.EnsureAsync(GamePrivilege.Multiplayer);
+
+        if (_exited || _transitioning)
+        {
+            return;
+        }
 
         if (!verdict.Allowed)
         {
@@ -860,6 +877,11 @@ public sealed class LobbyScreen : Screen
         // policy and continues rather than returning.
         await ApplyCommunicationsPrivilegeAsync(context);
 
+        if (_exited || _transitioning)
+        {
+            return;
+        }
+
         if (_intent == LobbyIntent.Join)
         {
             if (_inviteConnectionString is { } connectionString)
@@ -871,11 +893,25 @@ public sealed class LobbyScreen : Screen
             // The join code has no other source in this port - see the type remarks -
             // so it is collected here, before the network exists, exactly as the main
             // menu collected it before the GDScript's NetManager.join_match ever ran.
-            context.Screens.Push(new JoinCodeEntry("Enter Join Code", code => _ = JoinAsync(context, code)));
+            context.Screens.Push(new JoinCodeEntry(
+                "Enter Join Code",
+                code => _ = JoinAsync(context, code),
+                () => CancelCodeEntry(context)));
             return;
         }
 
         await HostAsync(context);
+    }
+
+    private void CancelCodeEntry(UiContext context)
+    {
+        if (_exited || _transitioning)
+        {
+            return;
+        }
+
+        _transitioning = true;
+        context.Screens.ReplaceAll(new MainMenuScreen());
     }
 
     private async Task HostAsync(UiContext context)
@@ -896,7 +932,7 @@ public sealed class LobbyScreen : Screen
             result = PlatformResult<string>.Canceled();
         }
 
-        if (_transitioning)
+        if (_exited || _transitioning)
         {
             return;
         }
@@ -924,6 +960,11 @@ public sealed class LobbyScreen : Screen
 
     private async Task JoinAsync(UiContext context, string code)
     {
+        if (_exited || _transitioning)
+        {
+            return;
+        }
+
         _connectingText = "Joining\u2026";
         var party = context.Platform.Party;
 
@@ -939,7 +980,7 @@ public sealed class LobbyScreen : Screen
             result = PlatformResult.Canceled();
         }
 
-        if (_transitioning)
+        if (_exited || _transitioning)
         {
             return;
         }
@@ -995,6 +1036,7 @@ public sealed class LobbyScreen : Screen
         {
             PlatformStatus.NetworkFailure => "The connection was lost. Check your network and try again.",
             PlatformStatus.TimedOut => "The match did not respond in time.",
+            PlatformStatus.SessionNotJoinable => "This match is full or no longer accepts players.",
             PlatformStatus.NotSignedIn => "Online play needs you to be signed in to Xbox.",
             PlatformStatus.NoPrivilege => "This account is not allowed to play online multiplayer.",
             PlatformStatus.Unavailable => "Online play is unavailable right now.",
@@ -1072,8 +1114,13 @@ public sealed class LobbyScreen : Screen
         {
             result = PlatformResult.Canceled();
         }
+        catch (Exception ex)
+        {
+            CrashLog.Mark($"lobby: join attempt failed ({ex.GetType().Name}).");
+            result = PlatformResult.Fail(PlatformStatus.Failed, "Could not join the match.");
+        }
 
-        if (_transitioning)
+        if (_exited || _transitioning)
         {
             return;
         }
@@ -1183,12 +1230,15 @@ public sealed class LobbyScreen : Screen
     /// merely at the moment it was created.
     /// </para>
     /// </remarks>
-    private static async Task ApplyCommunicationsPrivilegeAsync(UiContext context)
+    private async Task ApplyCommunicationsPrivilegeAsync(UiContext context)
     {
         var verdict = await context.Platform.Privileges
             .CheckAsync(GamePrivilege.Communications, useCache: false);
 
-        context.Platform.Party.ChatAllowed = verdict.Allowed;
+        if (!_exited && !_transitioning)
+        {
+            context.Platform.Party.ChatAllowed = verdict.Allowed;
+        }
     }
 
     /// <summary>
@@ -1836,7 +1886,7 @@ public sealed class LobbyScreen : Screen
 
     private void ReturnToMenuWithDialog(UiContext context, string title, string message)
     {
-        if (_transitioning)
+        if (_exited || _transitioning)
         {
             return;
         }
@@ -1855,6 +1905,11 @@ public sealed class LobbyScreen : Screen
         if (_network is not null && !_network.IsOffline)
         {
             await context.Platform.Party.LeaveAsync();
+
+            if (_exited)
+            {
+                return;
+            }
 
             // XR-064: an activity nobody deletes keeps advertising a session that no
             // longer exists, so a shell "Join game" lands a player in a lobby that is

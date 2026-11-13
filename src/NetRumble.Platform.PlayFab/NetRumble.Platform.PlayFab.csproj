@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <RootNamespace>NetRumble.Platform.PlayFab</RootNamespace>
-    <GdkNetRoot Condition="'$(GdkNetRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\..\gdk-dotnet\</GdkNetRoot>
+    <GdkNetRoot Condition="'$(GdkNetRoot)' == ''">$(MSBuildThisFileDirectory)..\..\..\gdk-dotnet\</GdkNetRoot>
     <SupportedOSPlatform>windows</SupportedOSPlatform>
   </PropertyGroup>
 
@@ -14,13 +14,6 @@
   <ItemGroup>
     <ProjectReference Include="$(GdkNetRoot)src\GDK.Net\GDK.Net.csproj" />
     <ProjectReference Include="..\NetRumble.Platform\NetRumble.Platform.csproj" />
-    <!--
-      For LocalFileGameSaveService. PlayFabGameSaveService inherits it rather than
-      reimplementing the local tier, which is what that class was left virtual for:
-      settings and match history are read before sign-in and must behave identically
-      whether or not a cloud tier exists.
-    -->
-    <ProjectReference Include="..\NetRumble.Platform.Offline\NetRumble.Platform.Offline.csproj" />
   </ItemGroup>
 
 </Project>

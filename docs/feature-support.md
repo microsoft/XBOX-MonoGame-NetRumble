@@ -4,24 +4,25 @@ What every platform feature in the sample is built to do, and the environments i
 in. This table describes intended behaviour rather than a record of live test results.
 Service availability, title access and account policy still apply.
 
-[Known gaps](known-gaps.md) records which of these have been observed working and which
-have only ever compiled.
+[Known gaps](known-gaps.md) records selected unverified service and hardware paths.
 
 ## Platform feature matrix
 
-| Feature | XBOX on PC | XBOX Series X\|S | LAN (no GDK, no account) | Offline |
-|---|---|---|---|---|
-| XBOX identity exchanged for a PlayFab identity | XBOX linked | XBOX linked | Local player only | No online identity |
-| PlayFab Lobby discovery and Party transport | Yes | Yes | Real UDP transport with a five-character join code | Practice only |
-| PlayFab Party voice and speech-to-text captions | Subject to XBOX policy | Subject to XBOX policy | Text only, no audio | Unavailable |
-| XBOX privileges, privacy, string verification, reporting | Yes | Yes | Bypassed | Unavailable |
-| XBOX friends, activity, invites, recent players | Yes | Yes | Unavailable, because there is no platform surface to carry a join string | Unavailable |
-| XBOX achievement reporting | Yes | Yes | Local counters only, no XBOX award | Local counters only |
-| Rich presence | Yes | Yes | Unavailable | Unavailable |
-| Roaming cloud save for settings and achievement stats | Connected storage (`XGameSave`) | Connected storage (`XGameSave`) | PlayFab user data with `--playfab-title=<id>` | Local file only |
-| Match history and counters | Local, per user | Local, per user | Local | Local |
-| Connectivity gating before online play is offered | Platform hint when known | Platform hint when known | Not gated | Not offered |
-| Lifecycle and controller detection | Focus and device detection | Suspend, resume, constrain, association detection | Desktop behaviour | Depends on platform |
+| Feature | XBOX on PC | XBOX Series X\|S |
+|---|---|---|
+| XBOX identity exchanged for a PlayFab identity | XBOX linked | XBOX linked |
+| PlayFab Lobby discovery and Party transport | Yes | Yes |
+| PlayFab Party voice and speech-to-text captions | Subject to XBOX policy | Subject to XBOX policy |
+| XBOX privileges, privacy, string verification, reporting | Yes | Yes |
+| XBOX friends, activity, invites, recent players | Yes | Yes |
+| XBOX achievement reporting | Yes | Yes |
+| Rich presence | Yes | Yes |
+| Roaming cloud save for settings and achievement stats | Connected storage (`XGameSaveFiles`) | Connected storage (`XGameSaveFiles`) |
+| Match history | Local, per user | Local, per user |
+| Connectivity gating before online play is offered | Platform hint when known | Platform hint when known |
+| Lifecycle and controller detection | Focus and device detection | Suspend, resume, constrain, association detection |
+
+Both platforms require GDK sign-in, including for single-player Practice.
 
 ## Scope of the game itself
 
@@ -34,18 +35,22 @@ The sample is a single four-player free-for-all deathmatch. It deliberately has:
 Discovery uses **PlayFab Lobby**, not PlayFab Matchmaking queues or tickets, because the
 sample favours a low-latency demonstration over a queue that has to fill.
 
-## Cloud save tiers
+## Cloud save
 
-The GDK provider saves to GDK connected storage (`XGameSave`), so settings, achievement
-stats and match history roam together and the platform resolves conflicts.
+The GDK provider saves settings and achievement stats through GDK connected storage
+(`XGameSaveFiles`). Match history uses local storage only and does not roam.
+GDK.Net's `GameSaveFiles.GetFolderWithUiAsync` acquires the per-user folder before the
+first file operation. Each save is a file named by its key directly in that directory.
+Writes use temporary files and atomic replacement; account changes invalidate queued work.
+The GDK handles save synchronization outside the title process. The title only acquires
+the correct user's directory and reads or writes files; it has no synchronization
+callbacks, reconciliation barriers or connectivity retry queue. Account changes,
+suspension and resume invalidate the cached directory. The next file operation
+reacquires it before accessing files. With the runtime initialized, cloud-operation
+results are queued through the runtime pump; a runtime-unavailable result can return
+immediately.
 
-The PlayFab user-data tier it replaced is still selectable with
-`/p:NetRumbleCloudSave=PlayFab`. The PlayFab developer decorator also uses this tier
-because it has no Xbox user handle for connected storage. Both paths now require the
-native Gaming Runtime and PlayFab libraries; only undecorated offline/LAN runs are
-GDK-free.
-
-Neither tier has been round-tripped between two devices. See
+Cloud save has not been round-tripped between two devices. See
 [Known gaps](known-gaps.md#never-observed-end-to-end).
 
 ## Known rough edges

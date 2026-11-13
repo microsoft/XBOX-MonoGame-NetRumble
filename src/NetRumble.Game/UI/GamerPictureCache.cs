@@ -18,8 +18,8 @@ namespace NetRumble.Game.UI;
 /// <para>
 /// <b>Everything here is optional.</b> A surface asks for a texture and either gets one or
 /// gets <see langword="null"/> and draws what it always drew. Nothing waits on a download,
-/// nothing blocks a frame on one, and a platform with no social service at all - offline,
-/// LAN, a desktop build with no GDK - simply never produces a texture. A missing gamerpic
+/// nothing blocks a frame on one, and missing social service dependencies simply
+/// produce no texture. A missing gamerpic
 /// is a cosmetic absence; a stalled lobby is not.
 /// </para>
 /// <para>

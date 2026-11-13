@@ -4,9 +4,10 @@ Pull requests are welcome. This page covers how to get a change accepted.
 
 ## The acceptance gate
 
-This repository has no automated gameplay or netcode test suite. The gate for any change to
-the platform boundary or the multiplayer core is `tools\NetRumble.PlatformSpike`, which
-has to pass in both its default and `gamecore` modes.
+The platform spike exercises the provider boundary and multiplayer core. The default and
+`gamecore` modes select the same GDK provider. Its broad run prints individual PASS, FAIL
+and SKIP results without aggregating every failure into its exit code, so review the
+output and record unavailable checks as untested.
 
 ```powershell
 dotnet build NetRumble.slnx /p:NoWarn=NU1603
@@ -14,9 +15,9 @@ dotnet run --project tools\NetRumble.PlatformSpike
 dotnet run --project tools\NetRumble.PlatformSpike -- --platform=gamecore
 ```
 
-`--platform=offline` reports three failures on a machine with the GDK installed, and that
-is expected. See
-[the offline spike](docs/troubleshooting.md#the-offline-spike-reports-three-failures-on-a-gdk-machine).
+For focused native-independent checks and a game-layer save check, see the
+[manual test plan](docs/manual-test-plan.md#automated-aids). Live sign-in, networking,
+roaming and hardware behavior still need the appropriate accounts and devices.
 
 ## Write the reasoning down
 
@@ -29,13 +30,14 @@ next person does not spend a day re-solving a question that was already settled.
 
 ## Respect the platform boundary
 
-`NetRumble.Core` and `NetRumble.Game` reference `NetRumble.Platform` only. If a change
-needs a native type, an `HRESULT` or an SDK structure in game code, it belongs behind the
-provider boundary instead. [Platform abstraction](docs/platform-abstraction.md) describes
-the four invariants a provider has to honour.
+`NetRumble.Core` references the platform contract without a concrete provider. The game
+also references GameCore for the composition root, but gameplay and UI consume the
+provider interfaces. If a change needs a native type, an `HRESULT` or an SDK structure in
+game code, it belongs behind that boundary instead.
+[Platform abstraction](docs/platform-abstraction.md) describes the four invariants.
 
-A `#if GDKX` in game code is a signal that something belongs behind that boundary. The
-constant is defined for the XBOX Series X|S build and nothing uses it.
+`#if GDKX` is used for target-specific startup and UI. Keep service APIs and native
+handles behind the provider boundary rather than adding platform calls to game code.
 
 ## Keep the documentation public-safe
 
@@ -61,8 +63,8 @@ documentation:
 
 ## Reporting a problem
 
-Read [Known gaps](docs/known-gaps.md) and [Troubleshooting](docs/troubleshooting.md) first.
-Between them they cover most of what is currently missing or environment specific.
+Check [Known gaps](docs/known-gaps.md) for platform limitations and
+[Troubleshooting](docs/troubleshooting.md) for symptoms and fixes.
 
 When you open an issue, include the provider mode you ran in, the exact command line, and
 the output of the platform spike if the problem touches sign-in, the transport or saving.
