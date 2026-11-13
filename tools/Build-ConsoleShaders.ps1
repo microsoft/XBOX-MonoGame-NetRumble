@@ -144,10 +144,38 @@ function Resolve-GameDkLatest {
 $monoGameRoot = Resolve-MonoGameRoot -Requested $MonoGameRoot
 $mgcbProject = Join-Path $monoGameRoot 'Tools\MonoGame.Content.Builder\MonoGame.Content.Builder.csproj'
 $mgcb = Join-Path $monoGameRoot 'Artifacts\MonoGame.Content.Builder\Release\mgcb.dll'
+$compiler = Join-Path $monoGameRoot 'Artifacts\MonoGame.Content.Builder\Release\MonoGame.Framework.Content.Pipeline.dll'
+$compilerSource = Join-Path $monoGameRoot 'Tools\MonoGame.Effect.Compiler\Effect\ShaderProfile.DirectX12.cs'
+$shaderPatch = Join-Path $repoRoot 'tools\patches\monogame-shader-rootsig.patch'
 
 Write-Host "MonoGame (GDKX overlay): $monoGameRoot"
 
-if (-not $SkipToolBuild -or -not (Test-Path $mgcb)) {
+Get-Command git -ErrorAction Stop | Out-Null
+$patchApplied = $false
+$patchFailed = $false
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+    $ErrorActionPreference = 'Continue'
+    & git -C $monoGameRoot apply --reverse --check $shaderPatch 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        & git -C $monoGameRoot apply $shaderPatch
+        $patchFailed = $LASTEXITCODE -ne 0
+        $patchApplied = -not $patchFailed
+    }
+}
+finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($patchFailed) {
+    throw "Could not apply the shader compiler patch to '$monoGameRoot'. Use a compatible isolated checkout."
+}
+
+$compilerNeedsBuild = $patchApplied -or -not (Test-Path $mgcb) -or -not (Test-Path $compiler)
+if (-not $compilerNeedsBuild) {
+    $compilerNeedsBuild = (Get-Item $compilerSource).LastWriteTimeUtc -gt (Get-Item $compiler).LastWriteTimeUtc
+}
+
+if (-not $SkipToolBuild -or $compilerNeedsBuild) {
     Write-Host 'Building MGCB with the GDKX shader profiles...'
 
     # DisableNativeBuild skips the premake5-driven native pipeline build, which is only

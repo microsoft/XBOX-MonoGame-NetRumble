@@ -170,3 +170,10 @@ The patch treats a controller read as connected only when it succeeds, avoiding 
 controllers on other error results. Bounded native and managed diagnostics trace input
 initialization, slot discovery, the first button input and the acquire-user handoff.
 These diagnostics are console-only and do not replace testing with a real controller.
+
+`tools\Build-ConsoleShaders.ps1` also applies
+`tools\patches\monogame-shader-rootsig.patch` to the MonoGame checkout before building
+MGCB. The patch preserves the space between DXC's root-signature arguments used to build
+the working console shaders. The script recognizes an applied patch, rejects incompatible
+sources, and rebuilds MGCB when the patch is newly applied or its compiler output is stale,
+even with `-SkipToolBuild`. Use an isolated MonoGame checkout for this change too.
