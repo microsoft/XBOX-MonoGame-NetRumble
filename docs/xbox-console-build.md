@@ -1,7 +1,9 @@
 # Building for XBOX Series X|S
 
 > [!IMPORTANT]
-> **This path is available to XBOX development partners only.**
+> **Building for XBOX Series X|S requires membership in the
+> [XBOX Developer Program](https://developer.microsoft.com/en-us/games/), which provides the
+> GDK that is compatible with XBOX Series X|S.**
 >
 > The public [Microsoft GDK on GitHub](https://aka.ms/gdk) covers Windows PC development.
 > Building, deploying and running on XBOX Series X|S additionally needs the console
